@@ -22,17 +22,23 @@ Pre-M0. What exists today:
 | `morph.core` — document IR, style resolution, resource store | Implemented |
 | Markdown provider — md4c reader, our writer (§8.3) | Implemented |
 | HTML provider — lexbor reader, our writer (§8.5) | Implemented |
-| DOCX provider (§8.4) | Not started — the long one |
+| DOCX provider — OPC container, reader and writer (§8.4) | Implemented, P1 + P2 |
 | PDF provider — WebView2 out, PDFium in (§8.6, §8.7) | Not started |
 | IPC framing and the broker protocol (§10) | Not started |
 | `morph.broker.exe`, `morph.worker.exe`, `morph.shellext.dll`, `Morph.App.exe` | Not started |
 | Image and A/V providers (WIC, Media Foundation, FFmpeg) | Not started |
 
-134 tests green (`ctest --preset x64-debug`).
+234 tests green (`ctest --preset x64-debug`).
 
-Markdown and HTML already convert to each other in both directions with no
-direct converter between them — the graph composes the route through the IR,
-which is the whole argument of §8.2.
+Markdown, HTML and DOCX already convert to each other in every direction with
+no direct converter between any pair — the graph composes each route through
+the IR, which is the whole argument of §8.2. Adding one format wires it to all
+the others.
+
+DOCX scope is held to §8.4's P1 (paragraphs, runs, headings, character
+formatting, hyperlinks, images) and P2 (lists, tables). P3 (footnotes,
+headers/footers, section properties) and P4 (tracked changes, comments) are
+deliberately not implemented.
 
 ## Decisions taken beyond the document
 

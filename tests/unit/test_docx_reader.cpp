@@ -245,18 +245,74 @@ TEST_CASE("docDefaults, basedOn and direct formatting resolve in the right order
         R"(<w:r><w:rPr><w:sz w:val="28"/></w:rPr><w:t>x</w:t></w:r></w:p>)";
 
     const Document d = Read(parts);
-    const auto* text = d.blocks[0].As<Paragraph>()->inlines[0].As<Text>();
+
+    // WHERE EACH LAYER ENDS UP. A run carries only what is not already implied
+    // by the block it sits in; the paragraph's style is reachable through
+    // styleRef, and docDefaults through StyleTable.
+    //
+    // Folding all three onto every run would be the obvious reading of "styles
+    // resolved on read", and it is wrong in practice: the document's default
+    // font and size would land on every single run, so the HTML writer would
+    // wrap every word in a span and the Markdown writer would report dropped
+    // character formatting for a document that has none.
+    const auto* paragraph = d.blocks[0].As<Paragraph>();
+    REQUIRE(paragraph != nullptr);
+    const auto* text = paragraph->inlines[0].As<Text>();
     REQUIRE(text != nullptr);
 
-    // Direct formatting wins the size.
+    // Direct formatting is the run's own, so it is on the run.
     REQUIRE(text->style.fontSizePt.has_value());
     CHECK(*text->style.fontSizePt == 14.0f);
-    // The nearest style wins the colour over its basedOn parent.
+    // The style's colour and the default font are not.
+    CHECK_FALSE(text->style.colour.has_value());
+    CHECK_FALSE(text->style.fontFamily.has_value());
+
+    // They are reachable through the paragraph's style, already flattened, with
+    // the nearest style winning the colour over its basedOn parent and
+    // docDefaults supplying what nothing else did.
+    CHECK(paragraph->styleRef == "Derived");
+    const NamedStyle* style = d.styles.Find(paragraph->styleRef);
+    REQUIRE(style != nullptr);
+    REQUIRE(style->paragraph.text.colour.has_value());
+    CHECK(style->paragraph.text.colour->ToHex() == "#00ff00");
+    REQUIRE(style->paragraph.text.fontFamily.has_value());
+    CHECK(*style->paragraph.text.fontFamily == "Calibri");
+
+    // And the document default is a question the IR can answer directly.
+    REQUIRE(d.styles.Default().text.fontFamily.has_value());
+    CHECK(*d.styles.Default().text.fontFamily == "Calibri");
+}
+
+TEST_CASE("a character style still resolves onto its run", "[docx][p1][styles]") {
+    // The chain a run DOES walk: w:rStyle and its basedOn ancestors. This is
+    // direct formatting by another name -- the author applied it to this text,
+    // not to the paragraph.
+    DocxParts parts;
+    parts.styles =
+        R"(<w:style w:type="character" w:styleId="CodeBase"><w:name w:val="Code Base"/>)"
+        R"(<w:rPr><w:rFonts w:ascii="Consolas"/><w:color w:val="FF0000"/></w:rPr></w:style>)"
+        R"(<w:style w:type="character" w:styleId="CodeEmph"><w:name w:val="Code Emphasis"/>)"
+        R"(<w:basedOn w:val="CodeBase"/><w:rPr><w:i/><w:color w:val="0000FF"/></w:rPr></w:style>)";
+    parts.body =
+        R"(<w:p><w:r><w:rPr><w:rStyle w:val="CodeEmph"/></w:rPr><w:t>styled</w:t></w:r></w:p>)";
+
+    const Document d = Read(parts);
+
+    // Italic came from the character style, so it is a semantic node.
+    std::size_t emphasis = 0;
+    ForEachInline(d.blocks[0].As<Paragraph>()->inlines,
+                  [&](const Inline& node) { emphasis += node.Is<Emphasis>() ? 1 : 0; });
+    CHECK(emphasis == 1);
+
+    const Text* text = nullptr;
+    ForEachInline(d.blocks[0].As<Paragraph>()->inlines,
+                  [&](const Inline& node) { if (node.As<Text>()) text = node.As<Text>(); });
+    REQUIRE(text != nullptr);
+    // The nearest character style wins the colour; its parent supplies the font.
     REQUIRE(text->style.colour.has_value());
-    CHECK(text->style.colour->ToHex() == "#00ff00");
-    // docDefaults supplies what nothing else did.
+    CHECK(text->style.colour->ToHex() == "#0000ff");
     REQUIRE(text->style.fontFamily.has_value());
-    CHECK(*text->style.fontFamily == "Calibri");
+    CHECK(*text->style.fontFamily == "Consolas");
 }
 
 TEST_CASE("a basedOn cycle is truncated rather than followed", "[docx][p1][styles]") {

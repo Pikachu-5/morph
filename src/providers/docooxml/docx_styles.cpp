@@ -307,15 +307,28 @@ doc::ParagraphStyle StyleResolver::ResolveParagraph(std::string_view styleId) co
     return resolved;
 }
 
-RunFormat StyleResolver::ResolveRun(std::string_view paragraphStyleId,
-                                    std::string_view characterStyleId) const {
+RunFormat StyleResolver::ResolveRun(std::string_view characterStyleId) const {
     RunFormat resolved;
-
-    // A character style is nearer than the paragraph style it sits inside.
     for (const RawStyle* style : Chain(characterStyleId)) resolved.Underlay(style->run);
-    for (const RawStyle* style : Chain(paragraphStyleId)) resolved.Underlay(style->run);
-    resolved.Underlay(runDefaults_);
     return resolved;
+}
+
+bool StyleResolver::IsCodeStyle(std::string_view styleId) const {
+    // Matched on both the id and the display name, because Word's own HTML
+    // import writes "HTMLPreformatted" while pandoc, our own writer and most
+    // templates write some spelling of "source code".
+    static constexpr std::string_view kCodeNames[] = {
+        "sourcecode", "source code", "htmlpreformatted", "html preformatted",
+        "preformattedtext", "preformatted text", "code", "codeblock", "code block"};
+
+    for (const RawStyle* style : Chain(styleId)) {
+        const std::string id = ToLowerAscii(style->id);
+        const std::string name = ToLowerAscii(style->name);
+        for (const std::string_view candidate : kCodeNames) {
+            if (id == candidate || name == candidate) return true;
+        }
+    }
+    return false;
 }
 
 std::optional<int> StyleResolver::HeadingLevel(std::string_view styleId) const {

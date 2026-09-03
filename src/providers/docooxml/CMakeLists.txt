@@ -11,6 +11,7 @@ add_library(morph_provider_docooxml STATIC
     docx_styles.cpp
     docx_numbering.cpp
     docx_reader.cpp
+    docx_writer.cpp
 )
 add_library(morph::provider::docooxml ALIAS morph_provider_docooxml)
 

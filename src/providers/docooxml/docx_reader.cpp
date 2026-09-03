@@ -215,6 +215,12 @@ private:
                         std::size_t depth);
     void ReadParagraph(const pugi::xml_node& p, Blocks& out, ListAssembler& lists,
                        std::size_t depth);
+
+    // Word has no code block element: a run of paragraphs sharing a code style
+    // IS the representation. They are accumulated here and emitted as one
+    // CodeBlock when anything else interrupts them, which is the inverse of the
+    // writer emitting one paragraph per line.
+    void FlushCode(Blocks& out);
     void ReadTable(const pugi::xml_node& tbl, Blocks& out, std::size_t depth);
     void ReadRuns(const pugi::xml_node& parent, ParagraphBuilder& builder,
                   const std::string& paragraphStyleId, std::size_t depth);
@@ -244,7 +250,21 @@ private:
     std::vector<std::string> anchors_;
     std::vector<std::string> noteCodes_;
     std::size_t blockCount_ = 0;
+
+    std::string pendingCode_;
+    bool hasPendingCode_ = false;
 };
+
+void DocxBody::FlushCode(Blocks& out) {
+    if (!hasPendingCode_) return;
+    hasPendingCode_ = false;
+
+    // The last line contributed a trailing newline; a CodeBlock's text ends with
+    // exactly one.
+    while (pendingCode_.size() > 1 && pendingCode_.ends_with("\n\n")) pendingCode_.pop_back();
+    out.push_back(Block::Of(CodeBlock{"", std::move(pendingCode_)}));
+    pendingCode_.clear();
+}
 
 std::string DocxBody::MakeAnchor(const Inlines& inlines) {
     std::string text = PlainText({Block::Of(Paragraph{inlines, {}, {}, std::nullopt})});
@@ -427,7 +447,7 @@ void DocxBody::ReadRuns(const pugi::xml_node& parent, ParagraphBuilder& builder,
         if (name == "r") {
             const std::string characterStyle = Attr(Descend(child, "rPr", "rStyle"), "val");
             RunFormat format = ParseRunProperties(Child(child, "rPr"));
-            format.Underlay(styles_.ResolveRun(paragraphStyleId, characterStyle));
+            format.Underlay(styles_.ResolveRun(characterStyle));
             ReadRun(child, builder, format);
             continue;
         }
@@ -538,6 +558,23 @@ void DocxBody::ReadParagraph(const pugi::xml_node& p, Blocks& out, ListAssembler
     if (numId == "0") numId.clear();
 
     const std::optional<int> heading = styles_.HeadingLevel(styleId);
+
+    // Word has no code block element, so a run of paragraphs sharing a code
+    // style is one. Accumulated rather than emitted, because each paragraph is
+    // one LINE -- which is exactly what our own writer produces.
+    if (numId.empty() && styles_.IsCodeStyle(styleId)) {
+        lists.Close();
+        std::string line =
+            PlainText({Block::Of(Paragraph{std::move(inlines), {}, {}, std::nullopt})});
+        // PlainText terminates a block; a blank line inside a listing has to
+        // survive, so the newline is added deliberately rather than inherited.
+        while (!line.empty() && line.back() == '\n') line.pop_back();
+        pendingCode_ += line;
+        pendingCode_ += '\n';
+        hasPendingCode_ = true;
+        return;
+    }
+    FlushCode(out);
 
     if (!numId.empty()) {
         const std::optional<LevelDefinition> definition = numbering_.Find(numId, level);
@@ -650,6 +687,7 @@ void DocxBody::ReadTable(const pugi::xml_node& tbl, Blocks& out, std::size_t dep
             for (pugi::xml_node child = tc.first_child(); child; child = child.next_sibling()) {
                 ReadBlockLevel(child, raw.cell.blocks, cellLists, depth + 1);
             }
+            FlushCode(raw.cell.blocks);
             cellLists.Close();
 
             row.push_back(std::move(raw));
@@ -749,6 +787,7 @@ void DocxBody::ReadBlockLevel(const pugi::xml_node& node, Blocks& out, ListAssem
         return;
     }
     if (name == "tbl") {
+        FlushCode(out);
         lists.Close();
         ReadTable(node, out, depth);
         return;
@@ -775,6 +814,7 @@ void DocxBody::ReadBody(const pugi::xml_node& body) {
     for (pugi::xml_node child = body.first_child(); child; child = child.next_sibling()) {
         ReadBlockLevel(child, document_.blocks, lists, 0);
     }
+    FlushCode(document_.blocks);
     lists.Close();
 }
 

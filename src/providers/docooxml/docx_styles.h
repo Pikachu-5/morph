@@ -66,10 +66,25 @@ public:
     // reads it.
     [[nodiscard]] doc::ParagraphStyle ResolveParagraph(std::string_view styleId) const;
 
-    // Flattened run format for a character styleId, layered over the run
-    // formatting the paragraph style imposes.
-    [[nodiscard]] RunFormat ResolveRun(std::string_view paragraphStyleId,
-                                       std::string_view characterStyleId) const;
+    // Flattened run format for a character styleId.
+    //
+    // Deliberately NOT layered with the paragraph style's rPr or with
+    // docDefaults. A run's IR formatting carries only what is not already
+    // implied by the block it sits in: the paragraph's own style is reachable
+    // through Paragraph::styleRef and StyleTable, and docDefaults is what
+    // StyleTable::Default() is for.
+    //
+    // Folding those in instead would put the document's default font and size on
+    // every single run, so an HTML writer would wrap every word in a span and a
+    // Markdown writer would report dropped character formatting for a document
+    // that has none. Worse, a heading whose style sets bold would come back as
+    // "# **Title**".
+    [[nodiscard]] RunFormat ResolveRun(std::string_view characterStyleId) const;
+
+    // True when this style means "this paragraph is code". Word has no code
+    // block element, so a styled paragraph IS the representation, and both our
+    // own writer and Word's HTML import use recognisable names for it.
+    [[nodiscard]] bool IsCodeStyle(std::string_view styleId) const;
 
     // The heading level a style implies, if any. Detected once here so that
     // neither the writers nor the body walk has to pattern-match on style names.

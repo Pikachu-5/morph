@@ -14,6 +14,7 @@ add_executable(morph_tests
     unit/test_html.cpp
     unit/test_opc.cpp
     unit/test_docx_reader.cpp
+    unit/test_docx_writer.cpp
 )
 
 target_include_directories(morph_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
