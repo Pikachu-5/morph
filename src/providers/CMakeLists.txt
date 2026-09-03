@@ -3,3 +3,4 @@
 # explicit that dynamic loading must not be built in v1.
 add_subdirectory(docmd)
 add_subdirectory(dochtml)
+add_subdirectory(docooxml)
