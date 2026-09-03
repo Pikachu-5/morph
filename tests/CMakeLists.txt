@@ -15,6 +15,7 @@ add_executable(morph_tests
     unit/test_opc.cpp
     unit/test_docx_reader.cpp
     unit/test_docx_writer.cpp
+    unit/test_pdf.cpp
 )
 
 target_include_directories(morph_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -24,6 +25,7 @@ target_link_libraries(morph_tests PRIVATE
     morph::provider::docmd
     morph::provider::dochtml
     morph::provider::docooxml
+    morph::provider::pdf
     morph::settings
     Catch2::Catch2WithMain
     miniz::miniz)

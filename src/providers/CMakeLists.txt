@@ -4,3 +4,4 @@
 add_subdirectory(docmd)
 add_subdirectory(dochtml)
 add_subdirectory(docooxml)
+add_subdirectory(pdf)

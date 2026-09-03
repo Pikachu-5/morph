@@ -45,6 +45,15 @@
           "version>=": "7.0.1"
         }
       ]
+    },
+    "pdf": {
+      "description": "PDF output through the WebView2 print pipeline (architecture section 8.6)",
+      "dependencies": [
+        {
+          "name": "webview2",
+          "version>=": "1.0.4191.47"
+        }
+      ]
     }
   }
 }

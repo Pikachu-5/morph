@@ -24,15 +24,16 @@ Pre-M0. What exists today:
 | Markdown provider — md4c reader, our writer (§8.3) | Implemented |
 | HTML provider — lexbor reader, our writer (§8.5) | Implemented |
 | DOCX provider — OPC container, reader and writer (§8.4) | Implemented, P1 + P2 |
-| PDF provider — WebView2 out, PDFium in (§8.6, §8.7) | Not started |
+| PDF output — WebView2 print pipeline (§8.6) | Implemented |
+| PDF input — PDFium (§8.7) | Not started |
 | IPC framing and the broker protocol (§10) | Not started |
 | `morph.broker.exe`, `morph.worker.exe`, `morph.shellext.dll`, `Morph.App.exe` | Not started |
 | Image and A/V providers (WIC, Media Foundation, FFmpeg) | Not started |
 
-234 tests green (`ctest --preset x64-debug`).
+245 tests green (`ctest --preset x64-debug`).
 
-Markdown, HTML and DOCX already convert to each other in every direction with
-no direct converter between any pair — the graph composes each route through
+Markdown, HTML and DOCX convert to each other in every direction, and all three
+render to PDF, with no direct converter between any pair — the graph composes each route through
 the IR, which is the whole argument of §8.2. Adding one format wires it to all
 the others.
 

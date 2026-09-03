@@ -17,7 +17,7 @@
         "CMAKE_CXX_STANDARD": "20",
         "CMAKE_CXX_STANDARD_REQUIRED": "ON",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "VCPKG_MANIFEST_FEATURES": "doc;ipc",
+        "VCPKG_MANIFEST_FEATURES": "doc;ipc;pdf",
         "CMAKE_C_COMPILER": "cl",
         "CMAKE_CXX_COMPILER": "cl"
       },

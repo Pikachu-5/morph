@@ -12,6 +12,7 @@ add_library(morph_core STATIC
     src/io/stream.cpp
     src/io/options.cpp
     src/io/provider.cpp
+    src/io/temp_store.cpp
     src/doc/style.cpp
     src/doc/resource.cpp
     src/doc/document.cpp
