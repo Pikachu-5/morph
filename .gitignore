@@ -20,3 +20,4 @@ compile_commands.json
 # The architecture document is a local reference, not a deliverable.
 # Section numbers in source comments point at it.
 *.pdf
+third_party/

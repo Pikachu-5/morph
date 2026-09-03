@@ -16,6 +16,7 @@ add_executable(morph_tests
     unit/test_docx_reader.cpp
     unit/test_docx_writer.cpp
     unit/test_pdf.cpp
+    unit/test_pdf_reader.cpp
 )
 
 target_include_directories(morph_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -35,3 +36,10 @@ set_target_properties(morph_tests PROPERTIES FOLDER "tests")
 # Registers each TEST_CASE with CTest individually, so a failure names the case
 # rather than the binary.
 catch_discover_tests(morph_tests)
+
+# pdfium.dll is loaded at run time and must sit beside the test executable.
+get_property(MORPH_PDFIUM_DLL GLOBAL PROPERTY MORPH_PDFIUM_DLL)
+add_custom_command(TARGET morph_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${MORPH_PDFIUM_DLL}" "$<TARGET_FILE_DIR:morph_tests>"
+    COMMENT "Copying pdfium.dll next to the tests")

@@ -25,15 +25,16 @@ Pre-M0. What exists today:
 | HTML provider — lexbor reader, our writer (§8.5) | Implemented |
 | DOCX provider — OPC container, reader and writer (§8.4) | Implemented, P1 + P2 |
 | PDF output — WebView2 print pipeline (§8.6) | Implemented |
-| PDF input — PDFium (§8.7) | Not started |
+| PDF input — PDFium text extraction (§8.7) | Implemented |
 | IPC framing and the broker protocol (§10) | Not started |
 | `morph.broker.exe`, `morph.worker.exe`, `morph.shellext.dll`, `Morph.App.exe` | Not started |
 | Image and A/V providers (WIC, Media Foundation, FFmpeg) | Not started |
 
-245 tests green (`ctest --preset x64-debug`).
+258 tests green (`ctest --preset x64-debug`).
 
-Markdown, HTML and DOCX convert to each other in every direction, and all three
-render to PDF, with no direct converter between any pair — the graph composes each route through
+Markdown, HTML and DOCX convert to each other in every direction, all three
+render to PDF, and PDF text extracts back into any of them — with no direct
+converter between any pair — the graph composes each route through
 the IR, which is the whole argument of §8.2. Adding one format wires it to all
 the others.
 
@@ -107,7 +108,8 @@ src/shellext/      morph.shellext.dll — IExplorerCommand
 src/app/           Morph.App.exe — WinUI, C++/WinRT
 packaging/         MSIX manifests, Store and GitHub SKUs
 tests/             unit, property, golden, fuzz, bench
-tools/             build script, license scanner, corpus fetcher
+third_party/       fetched prebuilts (PDFium); not committed
+tools/             build script, PDFium fetcher, license scanner
 ```
 
 ## Licensing

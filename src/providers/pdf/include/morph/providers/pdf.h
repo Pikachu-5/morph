@@ -22,6 +22,7 @@
 #include <string>
 #include <string_view>
 
+#include "morph/core/doc/pipeline.h"
 #include "morph/core/provider.h"
 
 namespace morph::pdf {
@@ -45,6 +46,26 @@ namespace morph::pdf {
 [[nodiscard]] Result RenderHtmlToPdf(std::string_view html, const OptionBag& options,
                                      ITempStore& temp, ISink& sink,
                                      const std::stop_token& cancel);
+
+// Extracts a PDF's text into the IR. Best-effort by nature and labelled as such:
+// the result always carries a STRUCTURAL rating and a note explaining that the
+// structure was inferred (section 8.7).
+[[nodiscard]] Result ReadPdf(std::span<const std::byte> bytes, const OptionBag& options,
+                             doc::Document& into);
+
+// pdf -> IR (section 8.7). A document READER rather than a byte provider,
+// because its output is the IR itself -- which is what gives pdf -> docx,
+// pdf -> md and pdf -> html without writing any of them.
+class PdfReader final : public doc::IDocumentReader {
+public:
+    [[nodiscard]] std::string_view Id() const noexcept override { return "pdf"; }
+    [[nodiscard]] std::vector<MediaProfile> Reads() const override;
+    [[nodiscard]] EdgeCost ReadCost(const MediaProfile& from) const override;
+    [[nodiscard]] std::optional<MediaProfile> Probe(ISource& source,
+                                                    const PathHint& hint) const override;
+    [[nodiscard]] Result Read(ConvertContext& context, ISource& source, const MediaProfile& from,
+                              doc::Document& into) override;
+};
 
 class PdfWriter final : public IConversionProvider {
 public:
