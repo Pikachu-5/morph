@@ -8,8 +8,9 @@ combines: a **format graph** rather than a format list, a **document model we
 own** rather than a shell over Pandoc or LibreOffice, and a **published fidelity
 contract** that tells users what they are about to lose before they commit.
 
-The full design is in [`Morph-Architecture-v0.1.pdf`](Morph-Architecture-v0.1.pdf).
-Section numbers referenced from source comments point at that document.
+Source comments cite section numbers (§4.2, §8.4, §15.2 and so on). They refer
+to the project's architecture document, which is kept outside the repository;
+the comments are written to stand on their own without it.
 
 ## Status
 
