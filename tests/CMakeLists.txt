@@ -6,12 +6,15 @@ add_executable(morph_tests
     unit/test_graph.cpp
     unit/test_planner.cpp
     unit/test_planner_invariants.cpp
+    unit/test_document_ir.cpp
+    unit/test_markdown.cpp
 )
 
 target_include_directories(morph_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(morph_tests PRIVATE
     morph::core
+    morph::provider::docmd
     morph::settings
     Catch2::Catch2WithMain)
 

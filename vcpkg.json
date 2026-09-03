@@ -6,22 +6,44 @@
   "license": "MIT",
   "builtin-baseline": "7ff71c68261ecf3b60cdb8772f2e6759ee0a71b1",
   "dependencies": [
-    { "name": "catch2", "version>=": "3.16.0" }
+    {
+      "name": "catch2",
+      "version>=": "3.16.0"
+    },
+    {
+      "name": "blake3",
+      "version>=": "1.8.7"
+    }
   ],
   "features": {
     "doc": {
       "description": "Document pipeline readers and writers (architecture section 8)",
       "dependencies": [
-        { "name": "md4c",    "version>=": "0.5.3" },
-        { "name": "pugixml", "version>=": "1.16" },
-        { "name": "miniz",   "version>=": "3.1.2" },
-        { "name": "lexbor",  "version>=": "3.0.0" }
+        {
+          "name": "md4c",
+          "version>=": "0.5.3"
+        },
+        {
+          "name": "pugixml",
+          "version>=": "1.16"
+        },
+        {
+          "name": "miniz",
+          "version>=": "3.1.2"
+        },
+        {
+          "name": "lexbor",
+          "version>=": "3.0.0"
+        }
       ]
     },
     "ipc": {
       "description": "MessagePack framing for the broker protocol (architecture section 10.2)",
       "dependencies": [
-        { "name": "msgpack-c", "version>=": "7.0.1" }
+        {
+          "name": "msgpack-c",
+          "version>=": "7.0.1"
+        }
       ]
     }
   }

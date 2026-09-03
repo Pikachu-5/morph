@@ -72,6 +72,7 @@ endif()
 
 # --- Components --------------------------------------------------------------
 add_subdirectory(src/core)
+add_subdirectory(src/providers)
 
 if(MORPH_BUILD_TESTS)
     enable_testing()

@@ -9,6 +9,13 @@ add_library(morph_core STATIC
     src/graph/media_profile.cpp
     src/graph/graph.cpp
     src/graph/planner.cpp
+    src/io/stream.cpp
+    src/io/options.cpp
+    src/io/provider.cpp
+    src/doc/style.cpp
+    src/doc/resource.cpp
+    src/doc/document.cpp
+    src/doc/pipeline.cpp
 )
 add_library(morph::core ALIAS morph_core)
 
@@ -17,7 +24,14 @@ target_include_directories(morph_core
             $<INSTALL_INTERFACE:include>
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-target_link_libraries(morph_core PUBLIC morph::settings)
+find_package(blake3 CONFIG REQUIRED)
+
+target_link_libraries(morph_core
+    PUBLIC  morph::settings
+    # Content addressing for the resource store (section 8.2). Private: BLAKE3 is
+    # an implementation detail of ResourceStore and must not leak into the
+    # broker-facing headers, which section 12.3 requires stay portable.
+    PRIVATE BLAKE3::blake3)
 
 set_target_properties(morph_core PROPERTIES
     FOLDER "core"
