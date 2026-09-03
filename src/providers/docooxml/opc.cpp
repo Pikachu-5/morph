@@ -285,7 +285,7 @@ Result Package::LoadContentTypes() {
     // pugixml does not expand external entities, which is why it was chosen
     // (section 8.4). parse_default excludes DTD processing entirely.
     const pugi::xml_parse_result parsed =
-        xml.load_buffer(types->bytes.data(), types->bytes.size(), pugi::parse_default);
+        xml.load_buffer(types->bytes.data(), types->bytes.size(), kOoxmlParseFlags);
     if (!parsed) {
         return Result::Error(Status::kMalformedInput,
                              "This document's content-type map is not valid XML.");
@@ -329,7 +329,7 @@ Result Package::LoadRelationships() {
         if (key.find("/_rels/") == std::string::npos) continue;
 
         pugi::xml_document xml;
-        if (!xml.load_buffer(part.bytes.data(), part.bytes.size(), pugi::parse_default)) {
+        if (!xml.load_buffer(part.bytes.data(), part.bytes.size(), kOoxmlParseFlags)) {
             // A damaged .rels part costs us that part's links, not the document.
             continue;
         }

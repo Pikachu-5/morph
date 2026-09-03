@@ -221,6 +221,12 @@ private:
     // CodeBlock when anything else interrupts them, which is the inverse of the
     // writer emitting one paragraph per line.
     void FlushCode(Blocks& out);
+
+    // Word has no block quote element either: a run of paragraphs sharing a
+    // quote style IS one. Same shape as FlushCode, and for the same reason --
+    // our own writer emits exactly this, so reading it back is what keeps
+    // docx -> md -> docx from degrading a quotation into plain prose.
+    void FlushQuote(Blocks& out);
     void ReadTable(const pugi::xml_node& tbl, Blocks& out, std::size_t depth);
     void ReadRuns(const pugi::xml_node& parent, ParagraphBuilder& builder,
                   const std::string& paragraphStyleId, std::size_t depth);
@@ -253,7 +259,14 @@ private:
 
     std::string pendingCode_;
     bool hasPendingCode_ = false;
+    Blocks pendingQuote_;
 };
+
+void DocxBody::FlushQuote(Blocks& out) {
+    if (pendingQuote_.empty()) return;
+    out.push_back(Block::Of(BlockQuote{std::move(pendingQuote_)}));
+    pendingQuote_.clear();
+}
 
 void DocxBody::FlushCode(Blocks& out) {
     if (!hasPendingCode_) return;
@@ -572,9 +585,20 @@ void DocxBody::ReadParagraph(const pugi::xml_node& p, Blocks& out, ListAssembler
         pendingCode_ += line;
         pendingCode_ += '\n';
         hasPendingCode_ = true;
+        FlushQuote(out);
         return;
     }
     FlushCode(out);
+
+    if (numId.empty() && !inlines.empty() && styles_.IsQuoteStyle(styleId)) {
+        lists.Close();
+        Paragraph paragraph;
+        paragraph.inlines = std::move(inlines);
+        paragraph.styleRef = styleId;
+        pendingQuote_.push_back(Block::Of(std::move(paragraph)));
+        return;
+    }
+    FlushQuote(out);
 
     if (!numId.empty()) {
         const std::optional<LevelDefinition> definition = numbering_.Find(numId, level);
@@ -688,6 +712,7 @@ void DocxBody::ReadTable(const pugi::xml_node& tbl, Blocks& out, std::size_t dep
                 ReadBlockLevel(child, raw.cell.blocks, cellLists, depth + 1);
             }
             FlushCode(raw.cell.blocks);
+            FlushQuote(raw.cell.blocks);
             cellLists.Close();
 
             row.push_back(std::move(raw));
@@ -788,6 +813,7 @@ void DocxBody::ReadBlockLevel(const pugi::xml_node& node, Blocks& out, ListAssem
     }
     if (name == "tbl") {
         FlushCode(out);
+        FlushQuote(out);
         lists.Close();
         ReadTable(node, out, depth);
         return;
@@ -815,6 +841,7 @@ void DocxBody::ReadBody(const pugi::xml_node& body) {
         ReadBlockLevel(child, document_.blocks, lists, 0);
     }
     FlushCode(document_.blocks);
+    FlushQuote(document_.blocks);
     lists.Close();
 }
 
@@ -829,7 +856,7 @@ void ReadCoreProperties(const opc::Package& package, Metadata& meta) {
     if (part == nullptr) return;
 
     pugi::xml_document xml;
-    if (!xml.load_buffer(part->bytes.data(), part->bytes.size(), pugi::parse_default)) return;
+    if (!xml.load_buffer(part->bytes.data(), part->bytes.size(), kOoxmlParseFlags)) return;
 
     const pugi::xml_node root = xml.first_child();
     for (pugi::xml_node node = root.first_child(); node; node = node.next_sibling()) {
@@ -872,7 +899,7 @@ Result ReadDocx(std::span<const std::byte> packageBytes, const OptionBag& /*opti
     pugi::xml_document xml;
     // pugixml does not expand external entities, which closes XXE by
     // construction rather than by configuration (section 8.4).
-    if (!xml.load_buffer(document->bytes.data(), document->bytes.size(), pugi::parse_default)) {
+    if (!xml.load_buffer(document->bytes.data(), document->bytes.size(), kOoxmlParseFlags)) {
         return Result::Error(Status::kMalformedInput,
                              "This document's main part is not valid XML.");
     }
@@ -887,7 +914,7 @@ Result ReadDocx(std::span<const std::byte> packageBytes, const OptionBag& /*opti
             package.FindRelationshipByType(documentPart, opc::rel::kStyles)) {
         if (const opc::Part* part =
                 package.Find(opc::Package::ResolveTarget(documentPart, styles->target))) {
-            stylesXml.load_buffer(part->bytes.data(), part->bytes.size(), pugi::parse_default);
+            stylesXml.load_buffer(part->bytes.data(), part->bytes.size(), kOoxmlParseFlags);
         }
     }
     pugi::xml_document numberingXml;
@@ -895,7 +922,7 @@ Result ReadDocx(std::span<const std::byte> packageBytes, const OptionBag& /*opti
             package.FindRelationshipByType(documentPart, opc::rel::kNumbering)) {
         if (const opc::Part* part =
                 package.Find(opc::Package::ResolveTarget(documentPart, numbering->target))) {
-            numberingXml.load_buffer(part->bytes.data(), part->bytes.size(), pugi::parse_default);
+            numberingXml.load_buffer(part->bytes.data(), part->bytes.size(), kOoxmlParseFlags);
         }
     }
 

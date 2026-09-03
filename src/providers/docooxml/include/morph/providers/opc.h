@@ -31,9 +31,31 @@
 #include <string_view>
 #include <vector>
 
+#include <pugixml.hpp>
+
 #include "morph/core/result.h"
 
 namespace morph::opc {
+
+// Parse flags for every OOXML part.
+//
+// parse_ws_pcdata_single is not decoration. pugixml DISCARDS a text node that
+// contains nothing but whitespace, and Word writes exactly such a node whenever
+// a space falls between two differently formatted runs:
+//
+//   <w:r><w:t xml:space="preserve">, and a</w:t></w:r>
+//   <w:r><w:t xml:space="preserve"> </w:t></w:r>
+//   <w:hyperlink>...
+//
+// Without the flag that middle run reads as empty, the space disappears, and the
+// sentence comes back as "and athe link". It is invisible in any test that does
+// not compare text across a formatting boundary.
+//
+// The _single variant keeps whitespace-only nodes only where they are an
+// element's sole child -- precisely the w:t case -- rather than turning every
+// line of pretty-printed indentation into a text node.
+inline constexpr unsigned int kOoxmlParseFlags = pugi::parse_default | pugi::parse_ws_pcdata_single;
+
 
 // Section 15.2's numbers, in one place so the fuzzer and the tests can point at
 // them rather than repeating magic values.

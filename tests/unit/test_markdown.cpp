@@ -529,3 +529,74 @@ TEST_CASE("null bytes become the replacement character", "[markdown][security]")
     CHECK(text.find('\0') == std::string::npos);
     CHECK(text.find("\xEF\xBF\xBD") != std::string::npos);
 }
+
+// --- Front matter -------------------------------------------------------------
+//
+// The writer emits YAML front matter for document metadata. Without a reader for
+// it, md -> docx -> md turned the block into a setext heading reading
+// "title: Reportauthor: A. Person". A writer that emits what its own reader
+// cannot read is a bug whatever the specification says -- and CommonMark says
+// nothing about front matter at all.
+
+TEST_CASE("front matter is metadata, not content", "[markdown][read][regression]") {
+    const Document d = Read(
+        "---\n"
+        "title: Quarterly Report\n"
+        "author: A. Person\n"
+        "lang: en-GB\n"
+        "---\n"
+        "\n"
+        "# Heading\n");
+
+    CHECK(d.meta.title == "Quarterly Report");
+    REQUIRE(d.meta.authors.size() == 1);
+    CHECK(d.meta.authors[0] == "A. Person");
+    CHECK(d.meta.lang == "en-GB");
+
+    // And none of it leaked into the body.
+    REQUIRE(d.blocks.size() == 1);
+    CHECK(d.blocks[0].Is<Heading>());
+    CHECK(PlainText(d.blocks) == "Heading\n");
+}
+
+TEST_CASE("an author sequence is read", "[markdown][read][regression]") {
+    const Document d = Read("---\nauthors:\n  - First Person\n  - Second Person\n---\n\nBody.\n");
+    REQUIRE(d.meta.authors.size() == 2);
+    CHECK(d.meta.authors[0] == "First Person");
+    CHECK(d.meta.authors[1] == "Second Person");
+}
+
+TEST_CASE("an unknown front matter key is kept rather than discarded",
+          "[markdown][read][regression]") {
+    // Design rule 1 applied to metadata: keep what we do not understand so it
+    // survives a round trip.
+    const Document d = Read("---\nkeywords: alpha, beta\n---\n\nBody.\n");
+    REQUIRE(d.meta.extra.count("keywords") == 1);
+    CHECK(d.meta.extra.at("keywords") == "alpha, beta");
+}
+
+TEST_CASE("metadata round-trips through the writer and back",
+          "[markdown][roundtrip][regression]") {
+    Document original;
+    original.meta.title = "The Title";
+    original.meta.authors = {"An Author"};
+    original.meta.lang = "en";
+    original.blocks.push_back(
+        Block::Of(Paragraph{{Inline::Of(Text{"Body.", {}})}, {}, {}, std::nullopt}));
+
+    const Document back = Read(Write(original));
+    CHECK(back.meta.title == "The Title");
+    REQUIRE(back.meta.authors.size() == 1);
+    CHECK(back.meta.authors[0] == "An Author");
+    CHECK(back.meta.lang == "en");
+    CHECK(PlainText(back.blocks) == "Body.\n");
+}
+
+TEST_CASE("a horizontal rule is not mistaken for front matter",
+          "[markdown][read][regression]") {
+    // "---" at the very start with no closing fence is a thematic break followed
+    // by prose, and consuming it would delete the document.
+    const Document d = Read("---\n\nJust a rule above this paragraph.\n");
+    CHECK(d.meta.title.empty());
+    CHECK(PlainText(d.blocks).find("Just a rule") != std::string::npos);
+}

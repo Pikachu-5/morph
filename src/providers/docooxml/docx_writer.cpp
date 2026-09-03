@@ -503,6 +503,16 @@ void Writer::WriteHeading(const Heading& heading) {
 }
 
 void Writer::WriteCode(const CodeBlock& code) {
+    if (!code.language.empty()) {
+        // A Word document has nowhere to record which language a listing is in.
+        // Unavoidable, and therefore exactly what the fidelity contract is for:
+        // the loss is named rather than left for the user to notice when the
+        // syntax highlighting does not come back.
+        Note("code-language-dropped",
+             "Word documents cannot record the programming language of a code block, so "
+             "syntax highlighting will not survive this conversion.");
+    }
+
     // One paragraph per line. A single paragraph with w:br would also render,
     // but Word treats the whole thing as one block for spacing and page breaks,
     // and a fifty-line listing then refuses to split across pages.

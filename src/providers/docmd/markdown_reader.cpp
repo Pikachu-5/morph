@@ -12,6 +12,7 @@
 
 #include <md4c.h>
 
+#include "front_matter.h"
 #include "morph/providers/markdown.h"
 
 namespace morph::docmd {
@@ -758,11 +759,16 @@ std::string_view ToString(Flavour flavour) {
     return "gfm";
 }
 
+
 Result ReadMarkdown(std::string_view text, const OptionBag& options, doc::Document& into) {
     // A byte order mark is not content. Leaving it in produces a document whose
     // first paragraph begins with an invisible character that survives every
     // conversion and confuses every diff.
     if (text.starts_with("\xEF\xBB\xBF")) text.remove_prefix(3);
+
+    // Before md4c sees it: md4c knows nothing about front matter and would
+    // read the block as a setext heading.
+    text = StripFrontMatter(text, into.meta);
 
     const Flavour flavour =
         FlavourFromString(options.GetString(opt::kMarkdownFlavour, "gfm"));

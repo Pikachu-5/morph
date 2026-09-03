@@ -595,3 +595,77 @@ TEST_CASE("DOCX reaches HTML through the IR", "[docx][write][roundtrip]") {
     CHECK(html.find("<h1") != std::string::npos);
     CHECK(html.find("<strong>text</strong>") != std::string::npos);
 }
+
+// --- Round-trip asymmetries found by running the real CLI --------------------
+//
+// Each of these was invisible to the component tests: the reader tests passed,
+// the writer tests passed, and the pipeline still lost content. They are the
+// argument for testing what the product actually does, not only what its parts
+// do individually.
+
+TEST_CASE("a space between differently formatted runs survives", "[docx][regression]") {
+    // pugixml DISCARDS a whitespace-only text node unless asked not to, and Word
+    // writes exactly that whenever a space falls between two runs with different
+    // formatting. Without parse_ws_pcdata_single the space vanished and
+    // "and a [link]" came back as "and a[link]" -- a corruption that only shows
+    // up across a formatting boundary, which is why no earlier test saw it.
+    const Document back = RoundTrip(FromMarkdown(
+        "Text with **bold** and a [link](https://example.com) after it.\n"));
+
+    const std::string text = PlainText(back.blocks);
+    INFO(text);
+    CHECK(text.find("with bold and a link after it") != std::string::npos);
+}
+
+TEST_CASE("a whitespace-only run is not dropped", "[docx][regression]") {
+    // The same bug, isolated to one run.
+    Document document;
+    Paragraph paragraph;
+    paragraph.inlines.push_back(Inline::Of(Strong{{Inline::Of(Text{"one", {}})}}));
+    paragraph.inlines.push_back(Inline::Of(Text{" ", {}}));
+    paragraph.inlines.push_back(Inline::Of(Strong{{Inline::Of(Text{"two", {}})}}));
+    document.blocks.push_back(Block::Of(std::move(paragraph)));
+
+    CHECK(PlainText(RoundTrip(document).blocks) == "one two\n");
+}
+
+TEST_CASE("a block quote round-trips as a block quote", "[docx][regression]") {
+    // Word has no block quote element, so the writer emits Quote-styled
+    // paragraphs. A reader that does not recognise the style back degrades every
+    // quotation into ordinary prose -- the same class of bug as code blocks.
+    const Document back = RoundTrip(FromMarkdown("> A quotation that matters.\n"));
+
+    REQUIRE(back.blocks.size() == 1);
+    const auto* quote = back.blocks[0].As<BlockQuote>();
+    REQUIRE(quote != nullptr);
+    CHECK(PlainText(quote->blocks) == "A quotation that matters.\n");
+}
+
+TEST_CASE("a quote does not swallow the prose after it", "[docx][regression]") {
+    const Document back = RoundTrip(FromMarkdown("> Quoted.\n\nNot quoted.\n"));
+
+    REQUIRE(back.blocks.size() == 2);
+    CHECK(back.blocks[0].Is<BlockQuote>());
+    CHECK(back.blocks[1].Is<Paragraph>());
+    CHECK(PlainText({back.blocks[1]}) == "Not quoted.\n");
+}
+
+TEST_CASE("a dropped code language is reported", "[docx][fidelity]") {
+    // Word has nowhere to record it, so the loss is unavoidable -- which makes
+    // naming it the fidelity contract's entire purpose.
+    std::vector<std::byte> bytes;
+    const Result result = WriteDocx(FromMarkdown("```cpp\nint x;\n```\n"), {}, bytes);
+
+    REQUIRE(result.ok());
+    bool noted = false;
+    for (const FidelityNote& note : result.notes()) noted |= note.code == "code-language-dropped";
+    CHECK(noted);
+
+    // And a listing with no language claims no loss.
+    std::vector<std::byte> plain;
+    const Result plainResult = WriteDocx(FromMarkdown("```\nint x;\n```\n"), {}, plain);
+    REQUIRE(plainResult.ok());
+    for (const FidelityNote& note : plainResult.notes()) {
+        CHECK(note.code != "code-language-dropped");
+    }
+}

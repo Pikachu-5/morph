@@ -313,6 +313,21 @@ RunFormat StyleResolver::ResolveRun(std::string_view characterStyleId) const {
     return resolved;
 }
 
+bool StyleResolver::IsQuoteStyle(std::string_view styleId) const {
+    static constexpr std::string_view kQuoteNames[] = {
+        "quote", "blockquote", "block quote", "blocktext", "block text",
+        "intensequote", "intense quote"};
+
+    for (const RawStyle* style : Chain(styleId)) {
+        const std::string id = ToLowerAscii(style->id);
+        const std::string name = ToLowerAscii(style->name);
+        for (const std::string_view candidate : kQuoteNames) {
+            if (id == candidate || name == candidate) return true;
+        }
+    }
+    return false;
+}
+
 bool StyleResolver::IsCodeStyle(std::string_view styleId) const {
     // Matched on both the id and the display name, because Word's own HTML
     // import writes "HTMLPreformatted" while pandoc, our own writer and most

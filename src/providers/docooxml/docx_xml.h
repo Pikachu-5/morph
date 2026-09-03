@@ -22,7 +22,13 @@
 
 #include <pugixml.hpp>
 
+#include "morph/providers/opc.h"
+
 namespace morph::docooxml {
+
+// Parse flags for every OOXML part, defined by the OPC layer that owns XML
+// parsing for this provider.
+using opc::kOoxmlParseFlags;
 
 // --- Namespace-agnostic access ----------------------------------------------
 

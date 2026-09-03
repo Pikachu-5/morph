@@ -27,10 +27,12 @@ Pre-M0. What exists today:
 | PDF output — WebView2 print pipeline (§8.6) | Implemented |
 | PDF input — PDFium text extraction (§8.7) | Implemented |
 | IPC framing, codec and pipe transport (§10.1, §10.2) | Implemented |
-| `morph.broker.exe`, `morph.worker.exe`, `morph.shellext.dll`, `Morph.App.exe` | Not started |
+| `morph.core` — plan executor with hop fusion and weighted progress | Implemented |
+| `morph.worker.exe` + the unadvertised CLI (§2, §3.1) | Implemented |
+| `morph.broker.exe`, `morph.shellext.dll`, `Morph.App.exe` | Not started |
 | Image and A/V providers (WIC, Media Foundation, FFmpeg) | Not started |
 
-285 tests green (`ctest --preset x64-debug`).
+307 tests green (`ctest --preset x64-debug`).
 
 Markdown, HTML and DOCX convert to each other in every direction, all three
 render to PDF, and PDF text extracts back into any of them — with no direct
@@ -42,6 +44,21 @@ DOCX scope is held to §8.4's P1 (paragraphs, runs, headings, character
 formatting, hyperlinks, images) and P2 (lists, tables). P3 (footnotes,
 headers/footers, section properties) and P4 (tracked changes, comments) are
 deliberately not implemented.
+
+## Trying it
+
+The worker carries an unadvertised command line over the same engine the app and
+the Explorer menu use (§2). After building:
+
+```powershell
+.\outuildd-debug\src\worker\morph.worker.exe convert report.docx report.pdf
+.\outuildd-debug\src\worker\morph.worker.exe targets notes.md
+.\outuildd-debug\src\worker\morph.worker.exe formats
+```
+
+`targets` lists everything a file can become, with the fidelity rating and hop
+count the planner worked out — the same numbers the UI will show before you
+commit.
 
 ## Decisions taken beyond the document
 

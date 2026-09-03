@@ -86,6 +86,12 @@ public:
     // own writer and Word's HTML import use recognisable names for it.
     [[nodiscard]] bool IsCodeStyle(std::string_view styleId) const;
 
+    // True when this style means "this paragraph is quoted". Word has no block
+    // quote element either, so like code it is a styled paragraph -- and our own
+    // writer produces one, which makes reading it back a symmetry requirement
+    // rather than a nicety.
+    [[nodiscard]] bool IsQuoteStyle(std::string_view styleId) const;
+
     // The heading level a style implies, if any. Detected once here so that
     // neither the writers nor the body walk has to pattern-match on style names.
     //
