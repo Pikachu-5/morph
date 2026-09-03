@@ -8,6 +8,9 @@ find_package(miniz CONFIG REQUIRED)
 
 add_library(morph_provider_docooxml STATIC
     opc.cpp
+    docx_styles.cpp
+    docx_numbering.cpp
+    docx_reader.cpp
 )
 add_library(morph::provider::docooxml ALIAS morph_provider_docooxml)
 
