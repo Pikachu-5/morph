@@ -1,0 +1,18 @@
+# Build
+out/
+build/
+vcpkg_installed/
+.vs/
+CMakeUserPresets.json
+
+# Packaging
+*.msix
+*.appx
+*.pfx
+AppPackages/
+BundleArtifacts/
+
+# Tooling
+.cache/
+compile_commands.json
+*.user
