@@ -388,9 +388,21 @@ int Builder::LeaveBlock(MD_BLOCKTYPE type, void* /*detail*/) {
 
         case MD_BLOCK_LI: {
             Frame frame = Pop();
-            frame.item.blocks = std::move(frame.blocks);
-            // A tight list's items hold a bare paragraph; keeping it is what
-            // lets the writer decide tightness rather than guess.
+
+            // md4c does not emit MD_BLOCK_P inside a TIGHT list item: the text
+            // arrives as inline content directly on the item, and only a loose
+            // item gets a paragraph. Wrapping it here gives every item the same
+            // block shape, so writers decide tightness from ListBlock::tight
+            // rather than from whether a paragraph happens to be present.
+            if (!frame.inlines.empty()) {
+                Paragraph paragraph;
+                paragraph.inlines = std::move(frame.inlines);
+                frame.item.blocks.push_back(Block::Of(std::move(paragraph)));
+            }
+            frame.item.blocks.insert(frame.item.blocks.end(),
+                                     std::make_move_iterator(frame.blocks.begin()),
+                                     std::make_move_iterator(frame.blocks.end()));
+
             Top().list.items.push_back(std::move(frame.item));
             break;
         }

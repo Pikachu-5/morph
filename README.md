@@ -17,11 +17,22 @@ Pre-M0. What exists today:
 
 | Component | State |
 | --- | --- |
-| `morph.core` — format graph, cost model, path planner, plan cache | Implemented, 49 tests green |
-| `morph.core` — document IR, options, job model | Not started |
-| IPC framing and the broker protocol | Not started |
+| `morph.core` — format graph, cost model, path planner, plan cache | Implemented |
+| `morph.core` — provider contract, streams, options, `Result` | Implemented |
+| `morph.core` — document IR, style resolution, resource store | Implemented |
+| Markdown provider — md4c reader, our writer (§8.3) | Implemented |
+| HTML provider — lexbor reader, our writer (§8.5) | Implemented |
+| DOCX provider (§8.4) | Not started — the long one |
+| PDF provider — WebView2 out, PDFium in (§8.6, §8.7) | Not started |
+| IPC framing and the broker protocol (§10) | Not started |
 | `morph.broker.exe`, `morph.worker.exe`, `morph.shellext.dll`, `Morph.App.exe` | Not started |
-| Providers (WIC, Media Foundation, FFmpeg, Markdown, OOXML, HTML, PDF) | Not started |
+| Image and A/V providers (WIC, Media Foundation, FFmpeg) | Not started |
+
+134 tests green (`ctest --preset x64-debug`).
+
+Markdown and HTML already convert to each other in both directions with no
+direct converter between them — the graph composes the route through the IR,
+which is the whole argument of §8.2.
 
 ## Decisions taken beyond the document
 

@@ -267,6 +267,44 @@ TEST_CASE("lists round-trip", "[markdown][roundtrip]") {
         "2. second\n");
 }
 
+TEST_CASE("a tight list item keeps its text", "[markdown][read][regression]") {
+    // md4c does not emit MD_BLOCK_P inside a tight item -- the text arrives as
+    // inline content on the item itself. Discarding it produced empty list
+    // items, and a round-trip check could not see the bug because both sides
+    // lost the text equally. So this asserts the content directly.
+    const Document d = Read("- alpha\n- beta\n");
+    const auto* list = d.blocks[0].As<ListBlock>();
+    REQUIRE(list != nullptr);
+    REQUIRE(list->items.size() == 2);
+
+    REQUIRE(list->items[0].blocks.size() == 1);
+    CHECK(PlainText(list->items[0].blocks) == "alpha\n");
+    CHECK(PlainText(list->items[1].blocks) == "beta\n");
+    CHECK(PlainText(d.blocks) == "alpha\nbeta\n");
+}
+
+TEST_CASE("a tight item with a nested list keeps both", "[markdown][read][regression]") {
+    const Document d = Read("- outer\n  - inner\n");
+    const auto* list = d.blocks[0].As<ListBlock>();
+    REQUIRE(list != nullptr);
+    REQUIRE(list->items.size() == 1);
+
+    // The item's own text comes first, then the nested list.
+    REQUIRE(list->items[0].blocks.size() == 2);
+    CHECK(list->items[0].blocks[0].Is<Paragraph>());
+    CHECK(list->items[0].blocks[1].Is<ListBlock>());
+    CHECK(PlainText(d.blocks) == "outer\ninner\n");
+}
+
+TEST_CASE("a loose list item keeps its text too", "[markdown][read][regression]") {
+    const Document d = Read("- alpha\n\n- beta\n");
+    const auto* list = d.blocks[0].As<ListBlock>();
+    REQUIRE(list != nullptr);
+    CHECK_FALSE(list->tight);
+    CHECK(PlainText(d.blocks) == "alpha\nbeta\n");
+}
+
+
 TEST_CASE("tables round-trip", "[markdown][roundtrip]") {
     CheckRoundTrip(
         "| Name | Value |\n"
