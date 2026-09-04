@@ -178,6 +178,19 @@ JobOutcome AwaitJob(ipc::Connection& connection) {
     }
 }
 
+// One broker for the whole test case, not one per section.
+//
+// Catch2 re-runs the body once per SECTION, so a broker owned by a local would
+// be terminated and restarted between them -- and that races itself: the new
+// process finds the old one's singleton mutex still held, exits as "already
+// running", and leaves the section connecting to a name nothing is listening on.
+// Which is a bug in the test rather than in the broker, and it only appeared in
+// a full run because a single-test run never reaches the second section.
+BrokerProcess& SharedBroker() {
+    static BrokerProcess broker;
+    return broker;
+}
+
 }  // namespace
 
 TEST_CASE("The broker converts a file end to end", "[broker][integration]") {
@@ -185,8 +198,7 @@ TEST_CASE("The broker converts a file end to end", "[broker][integration]") {
         SKIP("morph.broker.exe is not beside the tests");
     }
 
-    const BrokerProcess broker;
-    REQUIRE(broker.started());
+    REQUIRE(SharedBroker().started());
 
     ipc::Connection connection;
     REQUIRE(Connect(connection));

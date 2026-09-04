@@ -115,14 +115,48 @@ Result WorkerChannel::Start(std::wstring_view suffix, const WorkerLimits& limits
     if (const Result job = CreateContainer(limits); !job) return job;
     if (const Result spawned = Spawn(name); !spawned) return spawned;
 
-    // The worker connects back immediately. Ten seconds is far more than it
-    // needs and still bounded, because a worker that never connects must not
-    // wedge the scheduler slot waiting for it.
-    if (const Result accepted = server_.Accept(connection_, 10000); !accepted) {
-        Terminate();
-        return accepted.cancelled()
-                   ? Result::Error(Status::kInternal, "The worker did not connect back.")
-                   : accepted;
+    // Wait for the worker to connect back, watching the PROCESS rather than only
+    // the clock.
+    //
+    // A fixed deadline is the wrong instrument on its own. The two things that
+    // go wrong are a worker that died during startup -- which should be reported
+    // in milliseconds, with its exit code -- and a worker that is merely slow,
+    // where any deadline is a guess. An instrumented build takes nine seconds to
+    // initialise its providers and used to fail against a ten second cap, which
+    // is the kind of limit that looks generous until the day it is not.
+    //
+    // So: poll briefly, notice a dead process immediately, and otherwise be
+    // patient. The scheduler slot is not wedged either way, because a process
+    // that dies ends the wait.
+    constexpr DWORD kStartupDeadlineMs = 60'000;
+    const DWORD deadline = ::GetTickCount() + kStartupDeadlineMs;
+    while (true) {
+        const Result accepted = server_.Accept(connection_, 250);
+        if (accepted) break;
+        if (!accepted.cancelled()) {
+            Terminate();
+            return accepted;
+        }
+
+        if (::WaitForSingleObject(static_cast<HANDLE>(process_), 0) == WAIT_OBJECT_0) {
+            DWORD code = 0;
+            ::GetExitCodeProcess(static_cast<HANDLE>(process_), &code);
+            Terminate();
+            // Exit code 5 is the worker's own "internal error"; anything else
+            // here usually means it was killed, and the most common reason for
+            // that is its own job object's memory limit.
+            return Result::Error(Status::kInternal,
+                                 "The worker exited during startup with code " +
+                                     std::to_string(code) +
+                                     ". A limit that is too small for the worker to start "
+                                     "under is the usual cause.");
+        }
+
+        if (::GetTickCount() >= deadline) {
+            Terminate();
+            return Result::Error(Status::kInternal,
+                                 "The worker did not connect back within a minute.");
+        }
     }
     // Nothing else may connect to this worker's name once its worker has.
     server_.Close();

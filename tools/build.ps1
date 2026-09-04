@@ -97,6 +97,19 @@ if ($Target -in @('build', 'all')) {
     Invoke-Step "Build ($Preset)" { cmake --build --preset $Preset }
 }
 if ($Target -in @('test', 'all')) {
+    # The AddressSanitizer runtime is a DLL that ships with MSVC and is not on
+    # PATH, so an instrumented binary run without this dies at load with
+    # STATUS_DLL_NOT_FOUND (0xC0000135) and no message at all -- which looks
+    # exactly like a crash in the code being tested.
+    if ($Preset -eq 'x64-asan') {
+        $asanDir = if ($env:VCToolsInstallDir) { Join-Path $env:VCToolsInstallDir 'bin\Hostx64\x64' } else { $null }
+        if ($asanDir -and (Test-Path (Join-Path $asanDir 'clang_rt.asan_dynamic-x86_64.dll'))) {
+            $env:PATH = "$asanDir;$env:PATH"
+            Write-Host "ASan runtime -> $asanDir" -ForegroundColor DarkGray
+        } else {
+            Write-Warning 'The AddressSanitizer runtime was not found; the tests will fail to start.'
+        }
+    }
     Invoke-Step "Test ($Preset)" { ctest --preset $Preset }
 }
 

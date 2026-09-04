@@ -18,6 +18,7 @@ add_executable(morph_tests
     unit/test_wic.cpp
     unit/test_mf.cpp
     unit/test_ffmpeg.cpp
+    unit/test_hostile_input.cpp
     unit/test_pdf.cpp
     unit/test_pdf_reader.cpp
     unit/test_ipc.cpp
@@ -29,6 +30,8 @@ add_executable(morph_tests
     unit/test_broker_scheduling.cpp
     integration/test_broker_end_to_end.cpp
 )
+
+add_subdirectory(fuzz)
 
 target_include_directories(morph_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -43,6 +46,7 @@ target_link_libraries(morph_tests PRIVATE
     morph::provider::wic
     morph::provider::mf
     morph::provider::ffmpeg
+    morph::fuzz::targets
     morph::settings
     Catch2::Catch2WithMain
     miniz::miniz)

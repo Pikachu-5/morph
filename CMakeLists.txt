@@ -79,6 +79,22 @@ if(MORPH_ASAN AND MSVC)
     target_compile_options(morph_settings INTERFACE /fsanitize=address)
     # ASan is incompatible with incremental linking and with /RTC.
     target_link_options(morph_settings INTERFACE /INCREMENTAL:NO)
+
+    # Our code is instrumented and vcpkg's dependencies are not, and the MSVC
+    # standard library's container annotations have to agree across every
+    # translation unit that touches a std::vector or std::string. They do not
+    # here -- pugixml's objects were compiled without them -- and the link fails
+    # with LNK2038 "mismatch detected for 'annotate_vector'" on a target that has
+    # nothing obviously to do with either.
+    #
+    # Turning the annotations off is the documented answer and costs one class of
+    # finding: a container overflow that stays inside the allocation. Everything
+    # else ASan catches -- heap overflows, use-after-free, stack overflows, the
+    # bugs a fuzzer is actually looking for -- is unaffected. The alternative is
+    # an ASan build that does not link, which finds nothing at all.
+    target_compile_definitions(morph_settings INTERFACE
+        _DISABLE_STRING_ANNOTATION=1
+        _DISABLE_VECTOR_ANNOTATION=1)
 endif()
 
 # --- Components --------------------------------------------------------------

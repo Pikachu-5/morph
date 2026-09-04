@@ -36,7 +36,16 @@ constexpr std::size_t kMaxInputsPerJob = 10000;
 // cannot start under. It was killed by its own job object before it could
 // connect back, and the broker reported it as "the worker did not connect",
 // which is true and useless.
+#if defined(__SANITIZE_ADDRESS__)
+// An instrumented worker is a different animal: shadow memory, redzones around
+// every allocation, and quarantined frees. It does not fit in the measured floor
+// and does not have to -- nobody ships this build. Without the allowance the
+// worker is killed by its own job object during startup, which is a failure of
+// the test harness rather than of anything being tested.
+constexpr std::uint64_t kWorkerBaselineBytes = 2048ull * 1024 * 1024;
+#else
 constexpr std::uint64_t kWorkerBaselineBytes = 384ull * 1024 * 1024;
+#endif
 
 std::uint64_t AvailablePhysicalBytes() {
     MEMORYSTATUSEX status{};
@@ -110,9 +119,16 @@ Result Broker::Start() {
     // FILE_FLAG_FIRST_PIPE_INSTANCE." Both, because they fail differently: the
     // mutex catches a second broker before it does any work, and the pipe flag
     // catches a squatter that would not have taken the mutex at all.
+    // The name carries the install tag for the same reason the pipe's does: two
+    // builds in two directories are two Morphs, and they must not fight.
+    // Without it, a debug broker and a sanitiser broker on one machine share a
+    // mutex while using different pipes -- so the second one exits as "already
+    // running" and its clients then find nothing listening on the name they
+    // computed. The failure looks like a broker that started and vanished.
     DWORD session = 0;
     ::ProcessIdToSessionId(::GetCurrentProcessId(), &session);
-    const std::wstring mutexName = L"Local\\morph.broker." + std::to_wstring(session);
+    const std::wstring mutexName =
+        L"Local\\morph.broker." + std::to_wstring(session) + L"." + ipc::InstallTag();
 
     singleton_ = ::CreateMutexW(nullptr, TRUE, mutexName.c_str());
     if (singleton_ == nullptr) {
@@ -473,19 +489,27 @@ void Broker::HandleSubmit(const std::shared_ptr<ClientLink>& client,
         // Section 11.2: "A task that would exceed it is rejected at plan time
         // with a clear message rather than being allowed to start and then
         // killed halfway."
-        const std::uint64_t needed =
-            static_cast<std::uint64_t>(planned.plan->memPeakFactor *
-                                       static_cast<double>(inputBytes)) +
-            kWorkerBaselineBytes;
-        if (memoryCeiling > 0 && needed > memoryCeiling) {
+        //
+        // What is compared against the ceiling is the TASK's appetite --
+        // memPeakFactor x inputSize -- and not the worker's own footprint. The
+        // two are different things and mixing them gets both wrong: a machine
+        // with little memory free would refuse every conversion including a
+        // sixty-byte one, and the message would blame the file.
+        const auto appetite = static_cast<std::uint64_t>(planned.plan->memPeakFactor *
+                                                         static_cast<double>(inputBytes));
+        if (memoryCeiling > 0 && appetite > memoryCeiling) {
             task.status = Status::kResourceLimit;
             task.error = input.filename().string() + " would need about " +
-                         std::to_string(needed / (1024 * 1024)) +
+                         std::to_string(appetite / (1024 * 1024)) +
                          " MB to convert, and there is not that much memory free.";
             job->tasks.push_back(std::move(task));
             decided.push_back(static_cast<std::uint32_t>(i));
             continue;
         }
+
+        // The limit the job object gets is the appetite plus what the process
+        // costs before it opens anything.
+        const std::uint64_t needed = appetite + kWorkerBaselineBytes;
 
         const OutputPlan output =
             ResolveOutput(input, request.targetProfile, request.output, i, taken);

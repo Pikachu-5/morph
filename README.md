@@ -35,10 +35,13 @@ Pre-M0. What exists today:
 | `morph.shellext.dll` — IExplorerCommand, zero-IPC menu (§9) | Implemented, not yet registered |
 | A/V provider — Media Foundation, remux fast path (§7.1) | Implemented |
 | FFmpeg backend — subprocess, remux fast path (§7.2) | Implemented, no binary shipped |
+| Fuzz targets and the hostile-input corpus (§15, §16) | Implemented |
 | `Morph.App.exe` | Not started |
 
-379 tests green (`ctest --preset x64-debug`), including one that starts the
-broker, lets it start a worker, and converts a real file over the real pipe.
+382 tests green (`ctest --preset x64-debug`), including one that starts the
+broker, lets it start a worker, and converts a real file over the real pipe. The
+same 382 pass under AddressSanitizer (`.\tools\build.ps1 -Preset x64-asan`),
+which is the configuration the hostile-input corpus is worth running in.
 
 Markdown, HTML and DOCX convert to each other in every direction, all three
 render to PDF, and PDF text extracts back into any of them — with no direct
