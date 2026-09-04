@@ -35,14 +35,27 @@ Pre-M0. What exists today:
 | `morph.shellext.dll` — IExplorerCommand, zero-IPC menu (§9) | Implemented, not yet registered |
 | A/V provider — Media Foundation, remux fast path (§7.1) | Implemented |
 | FFmpeg backend — subprocess, remux fast path (§7.2) | Implemented, no binary shipped |
+| IR round-trip property tests (§16) | Implemented |
 | Fuzz targets and the hostile-input corpus (§15, §16) | Implemented |
 | Performance budgets, measured (§17) | Implemented, one budget missed |
 | `Morph.App.exe` | Not started |
 
-393 tests green (`ctest --preset x64-debug`), including one that starts the
+407 tests green (`ctest --preset x64-debug`), including one that starts the
 broker, lets it start a worker, and converts a real file over the real pipe. The
-same 393 pass under AddressSanitizer (`.\tools\build.ps1 -Preset x64-asan`),
+same 407 pass under AddressSanitizer (`.\tools\build.ps1 -Preset x64-asan`),
 which is the configuration the hostile-input corpus is worth running in.
+
+§16 calls the IR round-trip property test the one that "catches more real bugs
+than any other single test", and it was right. It generates documents nobody
+thought of, writes them to DOCX and to Markdown, reads them back and compares
+against what each format can actually hold. The afternoon it was first switched
+on it found eleven defects in code that had been read carefully several times --
+a Markdown writer that flattened every table cell to plain text, code spans that
+could not survive a Word round trip, a stray backslash appended to any paragraph
+ending in a line break, tight lists turning loose, sibling lists merging into
+one, horizontal rules disappearing through Word, and a document beginning with
+`---` whose entire contents were eaten as YAML front matter. All eleven are
+fixed, each with an example test of its own beside the property.
 
 Markdown, HTML and DOCX convert to each other in every direction, all three
 render to PDF, and PDF text extracts back into any of them — with no direct

@@ -237,3 +237,95 @@ TEST_CASE("a document provider must have a reader or a writer", "[ir][pipeline]"
     CHECK_THROWS_AS(DocumentProvider("x", nullptr, nullptr), std::invalid_argument);
     CHECK_THROWS_AS(DocumentProvider("", nullptr, nullptr), std::invalid_argument);
 }
+
+TEST_CASE("Normalise gives the IR its canonical form", "[ir]") {
+    // Adjacent text runs with the same style are one run.
+    Inlines runs;
+    runs.push_back(Inline::Of(Text{"one ", {}}));
+    runs.push_back(Inline::Of(Text{"two", {}}));
+    Normalise(runs);
+    REQUIRE(runs.size() == 1);
+    CHECK(runs[0].As<Text>()->text == "one two");
+
+    // Adjacent spans of the same kind are one span. Left alone, the Markdown
+    // writer emits "*one**two*" and the doubled asterisk inverts the span.
+    Inlines spans;
+    spans.push_back(Inline::Of(Emphasis{{Inline::Of(Text{"one", {}})}}));
+    spans.push_back(Inline::Of(Emphasis{{Inline::Of(Text{" two", {}})}}));
+    Normalise(spans);
+    REQUIRE(spans.size() == 1);
+    REQUIRE(spans[0].Is<Emphasis>());
+    REQUIRE(spans[0].As<Emphasis>()->children.size() == 1);
+    CHECK(spans[0].As<Emphasis>()->children[0].As<Text>()->text == "one two");
+
+    // Bold inside bold is bold: no format here can express the nesting.
+    Inlines nested;
+    Inlines inner;
+    inner.push_back(Inline::Of(Text{"a", {}}));
+    inner.push_back(Inline::Of(Strong{{Inline::Of(Text{"b", {}})}}));
+    inner.push_back(Inline::Of(Text{"c", {}}));
+    nested.push_back(Inline::Of(Strong{std::move(inner)}));
+    Normalise(nested);
+    REQUIRE(nested.size() == 1);
+    REQUIRE(nested[0].Is<Strong>());
+    const Inlines& flattened = nested[0].As<Strong>()->children;
+    REQUIRE(flattened.size() == 1);
+    CHECK(flattened[0].As<Text>()->text == "abc");
+
+    // A link is not a wrapper: two links side by side have different targets and
+    // merging them would drop one.
+    Inlines links;
+    links.push_back(Inline::Of(Link{"https://a", "", {Inline::Of(Text{"a", {}})}}));
+    links.push_back(Inline::Of(Link{"https://b", "", {Inline::Of(Text{"b", {}})}}));
+    Normalise(links);
+    CHECK(links.size() == 2);
+}
+
+TEST_CASE("Normalise is idempotent on a mixed tree", "[ir]") {
+    // The shape the property generator produced and the first version of
+    // Normalise did not flatten: a strong span holding text, a nested strong,
+    // and more text, sitting between two plain runs.
+    Inlines inner;
+    inner.push_back(Inline::Of(Text{"a", {}}));
+    inner.push_back(Inline::Of(Strong{{Inline::Of(Text{"b", {}})}}));
+    inner.push_back(Inline::Of(Text{"c", {}}));
+
+    Inlines paragraph;
+    paragraph.push_back(Inline::Of(Text{"before", {}}));
+    paragraph.push_back(Inline::Of(Strong{std::move(inner)}));
+    paragraph.push_back(Inline::Of(Text{"after", {}}));
+
+    Normalise(paragraph);
+    REQUIRE(paragraph.size() == 3);
+    REQUIRE(paragraph[1].Is<Strong>());
+    const Inlines& children = paragraph[1].As<Strong>()->children;
+    REQUIRE(children.size() == 1);
+    CHECK(children[0].As<Text>()->text == "abc");
+
+    // A second pass changes nothing: a canonical form that is not a fixed point
+    // is not a canonical form.
+    Inlines again = paragraph;
+    Normalise(again);
+    REQUIRE(again.size() == 3);
+    CHECK(again[1].As<Strong>()->children.size() == 1);
+}
+
+TEST_CASE("Normalise reaches inlines through blocks", "[ir]") {
+    Inlines inner;
+    inner.push_back(Inline::Of(Text{"a", {}}));
+    inner.push_back(Inline::Of(Strong{{Inline::Of(Text{"b", {}})}}));
+    inner.push_back(Inline::Of(Text{"c", {}}));
+
+    Paragraph paragraph;
+    paragraph.inlines.push_back(Inline::Of(Text{"before", {}}));
+    paragraph.inlines.push_back(Inline::Of(Strong{std::move(inner)}));
+
+    Blocks blocks;
+    blocks.push_back(Block::Of(std::move(paragraph)));
+    Normalise(blocks);
+
+    const Inlines& out = blocks[0].As<Paragraph>()->inlines;
+    REQUIRE(out.size() == 2);
+    REQUIRE(out[1].Is<Strong>());
+    CHECK(out[1].As<Strong>()->children.size() == 1);
+}

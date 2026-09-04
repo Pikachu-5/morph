@@ -41,6 +41,11 @@ constexpr std::string_view kHeadingStyles[] = {"Heading1", "Heading2", "Heading3
                                                "Heading4", "Heading5", "Heading6"};
 constexpr std::string_view kQuoteStyle = "Quote";
 constexpr std::string_view kCodeStyle = "SourceCode";
+// A CHARACTER style, distinct from the paragraph style above: a code block and
+// a code span are different things in every format, and Word will not apply a
+// paragraph style to a run. The name is Word's own, so a document opened there
+// looks the way a Word user expects.
+constexpr std::string_view kCodeSpanStyle = "HTMLCode";
 constexpr std::string_view kListStyle = "ListParagraph";
 constexpr std::string_view kHyperlinkStyle = "Hyperlink";
 
@@ -76,8 +81,22 @@ public:
     // Returns the numId for a new top-level list.
     [[nodiscard]] std::string Allocate(bool ordered, int start) {
         const int numId = nextNumId_++;
-        instances_.push_back(Instance{numId, ordered, start});
+        Instance instance{numId, ordered, {}};
+        instance.starts[0] = start;
+        instances_.push_back(std::move(instance));
         return std::to_string(numId);
+    }
+
+    // A nested list's own starting number. WordprocessingML says it with a
+    // startOverride on that level, and without it a sub-list beginning at 2
+    // silently begins at 1 -- the numbering is a property of the definition, not
+    // of the paragraphs, so there is nowhere else to put it.
+    void SetStart(std::string_view numId, int level, int start) {
+        for (Instance& instance : instances_) {
+            if (std::to_string(instance.numId) != numId) continue;
+            instance.starts[level] = start;
+            return;
+        }
     }
 
     [[nodiscard]] bool Empty() const noexcept { return instances_.empty(); }
@@ -124,8 +143,11 @@ public:
             // two sibling ordered lists restart rather than continue -- the
             // reader's mapping 4, written from the other side.
             if (instance.ordered) {
-                xml += R"(<w:lvlOverride w:ilvl="0"><w:startOverride w:val=")" +
-                       std::to_string(instance.start) + R"("/></w:lvlOverride>)";
+                for (const auto& [level, start] : instance.starts) {
+                    xml += R"(<w:lvlOverride w:ilvl=")" + std::to_string(level) +
+                           R"("><w:startOverride w:val=")" + std::to_string(start) +
+                           R"("/></w:lvlOverride>)";
+                }
             }
             xml += R"(</w:num>)";
         }
@@ -138,7 +160,9 @@ private:
     struct Instance {
         int numId;
         bool ordered;
-        int start;
+        // Level -> first number. Level 0 is always present; deeper levels appear
+        // when a nested list starts at something other than 1.
+        std::map<int, int> starts;
     };
     std::vector<Instance> instances_;
     int nextNumId_ = 1;
@@ -253,11 +277,31 @@ std::string Writer::ParagraphProperties(std::string_view styleId, const Paragrap
 std::string Writer::RunProperties(const WriteFormat& format) const {
     std::string properties;
 
-    if (format.hyperlink) {
-        properties += R"(<w:rStyle w:val=")" + std::string(kHyperlinkStyle) + R"("/>)";
-    }
+    // A RUN HAS ONE CHARACTER STYLE. Writing two w:rStyle elements is not
+    // valid, and a reader takes the first -- which is how a code span inside a
+    // link stopped being a code span: the Hyperlink style got there first and
+    // the HTMLCode style was ignored.
+    //
+    // Code wins where they collide, because the link is already stated by the
+    // w:hyperlink element around the run and only its APPEARANCE lives in the
+    // style. That appearance is written out directly instead.
     if (format.code) {
+        // The style AND the font. The style is what makes this readable back --
+        // a monospace font is a guess, a character style is a statement -- and
+        // the font is what makes it look right in Word, which resolves the style
+        // only if it knows it.
+        properties += R"(<w:rStyle w:val=")" + std::string(kCodeSpanStyle) + R"("/>)";
         properties += R"(<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:cs="Consolas"/>)";
+        if (format.hyperlink) {
+            properties += R"(<w:color w:val="0563C1"/><w:u w:val="single"/>)";
+        }
+    } else if (format.hyperlink) {
+        properties += R"(<w:rStyle w:val=")" + std::string(kHyperlinkStyle) + R"("/>)";
+        if (format.style.fontFamily) {
+            const std::string family = XmlEscape(*format.style.fontFamily);
+            properties +=
+                R"(<w:rFonts w:ascii=")" + family + R"(" w:hAnsi=")" + family + R"("/>)";
+        }
     } else if (format.style.fontFamily) {
         const std::string family = XmlEscape(*format.style.fontFamily);
         properties += R"(<w:rFonts w:ascii=")" + family + R"(" w:hAnsi=")" + family + R"("/>)";
@@ -560,11 +604,52 @@ void Writer::WriteList(const ListBlock& list, const std::string& numId, int leve
     }
 
     for (const ListItem& item : list.items) {
-        bool first = true;
+        // THE MARKER COMES FIRST, even when there is nothing to put on it. An
+        // item whose only content is a nested list still needs a numbered
+        // paragraph of its own, and it needs it BEFORE the nested list's
+        // paragraphs: emitted afterwards, the nested list attaches to the
+        // PREVIOUS item on the way back in and the empty paragraph reads as a
+        // trailing empty item. The flat encoding has no other way to say "this
+        // item exists".
+        const bool hasOwnParagraph =
+            !item.blocks.empty() && item.blocks.front().Is<Paragraph>();
+        if (!hasOwnParagraph) {
+            body_ += "<w:p>";
+            body_ += ParagraphProperties(kListStyle, ParagraphStyle{},
+                                         R"(<w:numPr><w:ilvl w:val=")" + std::to_string(level) +
+                                             R"("/><w:numId w:val=")" + numId +
+                                             R"("/></w:numPr>)");
+            body_ += "</w:p>";
+        }
+
+        bool first = hasOwnParagraph;
         for (const Block& block : item.blocks) {
             if (const auto* nested = block.As<ListBlock>()) {
                 // A nested list continues in the same numId at the next level,
                 // which is exactly the flat encoding the reader reconstructs.
+                //
+                // KNOWN LIMITATION, found by the round-trip property test and
+                // left deliberately: a nested list of a DIFFERENT kind from its
+                // parent -- a numbered list inside a bulleted one -- inherits
+                // the parent's markers, because both abstract definitions above
+                // use one format for all nine levels. Fixing it means an
+                // abstractNum per level-format ladder; giving the nested list
+                // its own numId does not work, since a change of numId is how
+                // WordprocessingML says "a different list" and the reader would
+                // un-nest it (mapping 2 in docx_reader.cpp).
+                if (nested->ordered && nested->start != 1) {
+                    // Recorded on the numbering definition, which is the only
+                    // place WordprocessingML will take it. That makes it a
+                    // property of the whole numId rather than of this list, so
+                    // two sub-lists at the same level under one parent cannot
+                    // start at different numbers -- the second one inherits the
+                    // first one's override. Restarting properly needs a fresh
+                    // numId, and a change of numId is how the format says "a
+                    // different list", which would un-nest it (mapping 2 in
+                    // docx_reader.cpp). Known limitation, found by the round-trip
+                    // property test.
+                    numbering_.SetStart(numId, level + 1, nested->start);
+                }
                 WriteList(*nested, numId, level + 1, depth + 1);
                 continue;
             }
@@ -593,16 +678,6 @@ void Writer::WriteList(const ListBlock& list, const std::string& numId, int leve
 
             WriteBlock(block, depth + 1);
             first = false;
-        }
-        if (first) {
-            // An item with no paragraph of its own still needs a numbered
-            // paragraph, or the item vanishes and the numbering shifts.
-            body_ += "<w:p>";
-            body_ += ParagraphProperties(kListStyle, ParagraphStyle{},
-                                         R"(<w:numPr><w:ilvl w:val=")" + std::to_string(level) +
-                                             R"("/><w:numId w:val=")" + numId +
-                                             R"("/></w:numPr>)");
-            body_ += "</w:p>";
         }
     }
 }
@@ -798,6 +873,12 @@ std::string Writer::BuildStylesXml() const {
         R"(<w:style w:type="character" w:styleId=")" + std::string(kHyperlinkStyle) + R"(">)"
         R"(<w:name w:val="Hyperlink"/>)"
         R"(<w:rPr><w:color w:val="0563C1"/><w:u w:val="single"/></w:rPr></w:style>)";
+
+    xml +=
+        R"(<w:style w:type="character" w:styleId=")" + std::string(kCodeSpanStyle) + R"(">)"
+        R"(<w:name w:val="HTML Code"/>)"
+        R"(<w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:cs="Consolas"/>)"
+        R"(</w:rPr></w:style>)";
 
     xml += "</w:styles>";
     return xml;

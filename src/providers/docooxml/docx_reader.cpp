@@ -66,6 +66,12 @@ public:
 
     [[nodiscard]] Inlines Take() {
         Flush();
+        // WordprocessingML has no inline nesting at all -- italic is a property
+        // of a run -- so a sentence that is italic throughout arrives as one run
+        // per change of anything else, and a code span or a spelling boundary in
+        // the middle of it splits the reconstruction into two adjacent spans.
+        // Normalise puts them back together (document.h says why it must).
+        Normalise(inlines_);
         return std::move(inlines_);
     }
 
@@ -75,10 +81,18 @@ private:
     void Flush() {
         if (pending_.empty()) return;
 
-        Text text;
-        text.text = std::move(pending_);
-        text.style = pendingFormat_.style;
-        Inline node = Inline::Of(std::move(text));
+        Inline node = Inline::Of(Text{});
+        if (pendingFormat_.code.value_or(false)) {
+            // InlineCode carries text and nothing else, which is right: a code
+            // span's font IS the code span. What the run also said about family
+            // or size is subsumed rather than dropped.
+            node = Inline::Of(InlineCode{std::move(pending_)});
+        } else {
+            Text text;
+            text.text = std::move(pending_);
+            text.style = pendingFormat_.style;
+            node = Inline::Of(std::move(text));
+        }
 
         // Bold, italic and strikethrough become semantic nodes rather than
         // style, because every target format has a construct for them. Nesting
@@ -461,6 +475,12 @@ void DocxBody::ReadRuns(const pugi::xml_node& parent, ParagraphBuilder& builder,
             const std::string characterStyle = Attr(Descend(child, "rPr", "rStyle"), "val");
             RunFormat format = ParseRunProperties(Child(child, "rPr"));
             format.Underlay(styles_.ResolveRun(characterStyle));
+            // A code span is a character style, not an element. Matched by the
+            // same name table the code-block case uses, so a document from Word,
+            // from pandoc or from us all read the same way.
+            if (!characterStyle.empty() && styles_.IsCodeStyle(characterStyle)) {
+                format.code = true;
+            }
             ReadRun(child, builder, format);
             continue;
         }
@@ -589,6 +609,20 @@ void DocxBody::ReadParagraph(const pugi::xml_node& p, Blocks& out, ListAssembler
         return;
     }
     FlushCode(out);
+
+    // An empty paragraph with a bottom border is what Word produces for a
+    // horizontal rule, and it is what our own writer emits for one. Without this
+    // the rule reads back as an empty paragraph and disappears: the writer had a
+    // spelling for the construct and the reader had no ear for it.
+    //
+    // AFTER FlushCode, not before. A pending listing has not been emitted yet,
+    // and a rule pushed ahead of it lands in front of the code block it followed.
+    if (inlines.empty() && numId.empty() && Child(Child(pPr, "pBdr"), "bottom")) {
+        lists.Close();
+        FlushQuote(out);
+        out.push_back(Block::Of(HorizontalRule{}));
+        return;
+    }
 
     if (numId.empty() && !inlines.empty() && styles_.IsQuoteStyle(styleId)) {
         lists.Close();
@@ -935,6 +969,10 @@ Result ReadDocx(std::span<const std::byte> packageBytes, const OptionBag& /*opti
         return Result::Error(Status::kMalformedInput, "This document has no body.");
     }
     body.ReadBody(bodyNode);
+
+    // Every reader ends here: the IR has a canonical form and producing it is
+    // the reader's job, not each writer's (document.h, Normalise).
+    doc::Normalise(into.blocks);
 
     return result;
 }

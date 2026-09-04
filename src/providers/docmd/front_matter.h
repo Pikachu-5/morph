@@ -50,6 +50,30 @@ inline std::string_view StripFrontMatter(std::string_view text, doc::Metadata& m
     // horizontal rule followed by prose, which must be left completely alone.
     if (end == std::string_view::npos) return text;
 
+    // A CLOSING FENCE IS NOT ENOUGH. A document that opens with a thematic break
+    // and has another one further down looks exactly like front matter from
+    // here, and treating it as such deletes everything between the two rules --
+    // which is most of the document. So the block also has to LOOK like YAML:
+    // every non-blank line is "key: value", or a "- item" under one.
+    {
+        bool sawKey = false;
+        for (std::size_t scan = firstBreak + 1; scan < end;) {
+            const std::size_t lineEnd = (std::min)(text.find('\n', scan), end);
+            std::string_view line = text.substr(scan, lineEnd - scan);
+            scan = lineEnd + 1;
+
+            while (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+            if (line.empty() || line == "---" || line == "...") continue;
+
+            const std::size_t firstText = line.find_first_not_of(" \t");
+            if (firstText == std::string_view::npos) continue;
+            if (line[firstText] == '-' && sawKey) continue;  // a sequence item
+            if (line.find(':') == std::string_view::npos) return text;
+            sawKey = true;
+        }
+        if (!sawKey) return text;
+    }
+
     std::string pendingKey;
     for (std::size_t scan = firstBreak + 1; scan < end;) {
         const std::size_t lineEnd = (std::min)(text.find('\n', scan), end);

@@ -159,7 +159,11 @@ public:
     [[nodiscard]] std::string Take() { return std::move(out_); }
 
 private:
-    void WriteBlocks(const Blocks& blocks, std::size_t depth);
+    // `tight` suppresses the blank line BETWEEN blocks, which is what keeps a
+    // tight list tight: CommonMark decides looseness from the source, so a
+    // blank line between an item's paragraph and its nested list turns the
+    // whole list loose on the way back in.
+    void WriteBlocks(const Blocks& blocks, std::size_t depth, bool tight = false);
     void WriteBlock(const Block& block, std::size_t depth);
     void WriteParagraph(const Paragraph& paragraph);
     void WriteHeading(const Heading& heading);
@@ -173,6 +177,12 @@ private:
 
     void WriteInlines(const Inlines& inlines, bool atLineStart);
     void WriteInline(const Inline& node, bool atLineStart);
+
+    // Renders inlines to a string instead of to the output, by lending them the
+    // whole emitter and taking it back. Table cells need this: they are laid out
+    // as a grid, so their contents have to exist as measurable strings before
+    // any of them is written.
+    [[nodiscard]] std::string Capture(const Inlines& inlines);
 
     // Everything written while a prefix is active gets that prefix after each
     // newline. This is how nesting works for quotes and list items without a
@@ -195,6 +205,19 @@ private:
     std::string out_;
     std::vector<std::string> prefixes_;
     bool atLineStart_ = true;
+    // TWO SIBLING LISTS ARE ONE LIST in Markdown unless the marker changes: a
+    // bullet list followed by a bullet list, blank line or not, parses as a
+    // single loose list. CommonMark's rule that a different bullet character
+    // starts a new list is the only way to keep them apart, so sibling lists
+    // alternate markers. Without this, the two lists merge and the survivor
+    // turns loose -- which is exactly what a round trip reports.
+    bool alternateListMarker_ = false;
+    // Inside an ATX heading, where a line break cannot be written at all.
+    bool inHeading_ = false;
+    // Whether the inline being written is immediately followed by a word
+    // character. Only the strikethrough delimiter cares, and only WriteInlines
+    // can see it, so it is passed down here rather than through every signature.
+    bool nextIsWord_ = false;
     bool pendingBlankLine_ = false;
 
     // Footnote definitions are collected as they are referenced and emitted at
@@ -203,6 +226,24 @@ private:
     std::vector<const Footnote*> footnotes_;
     std::vector<std::string> footnoteIds_;
 };
+
+std::string Writer::Capture(const Inlines& inlines) {
+    std::string saved;
+    saved.swap(out_);
+    std::vector<std::string> savedPrefixes;
+    savedPrefixes.swap(prefixes_);
+    const bool savedAtLineStart = atLineStart_;
+    atLineStart_ = false;
+
+    WriteInlines(inlines, /*atLineStart=*/false);
+
+    std::string captured;
+    captured.swap(out_);
+    out_.swap(saved);
+    prefixes_.swap(savedPrefixes);
+    atLineStart_ = savedAtLineStart;
+    return captured;
+}
 
 std::string Writer::Prefix() const {
     std::string prefix;
@@ -286,15 +327,33 @@ void Writer::WriteDocument() {
     if (!out_.empty()) out_.push_back('\n');
 }
 
-void Writer::WriteBlocks(const Blocks& blocks, std::size_t depth) {
+void Writer::WriteBlocks(const Blocks& blocks, std::size_t depth, bool tight) {
     if (depth > kMaxBlockDepth) {
         Note("nesting-truncated", "Content nested deeper than 100 levels was omitted.",
              Fidelity::Structural);
         return;
     }
     bool first = true;
+    const Block* previous = nullptr;
     for (const Block& block : blocks) {
-        if (!first) BlankLine();
+        if (const auto* list = block.As<ListBlock>()) {
+            const auto* before = previous != nullptr ? previous->As<ListBlock>() : nullptr;
+            alternateListMarker_ =
+                before != nullptr && before->ordered == list->ordered && !alternateListMarker_;
+        }
+        previous = &block;
+        if (!first) {
+            // Only before a NESTED LIST. Two paragraphs with no blank line
+            // between them are one paragraph, and CommonMark's own rule is that
+            // an item directly containing two blocks separated by a blank line
+            // makes the list loose -- so that shape cannot be written tight, and
+            // pretending otherwise merges the user's paragraphs together.
+            if (tight && block.Is<ListBlock>()) {
+                NewLine();
+            } else {
+                BlankLine();
+            }
+        }
         first = false;
         WriteBlock(block, depth);
     }
@@ -309,7 +368,18 @@ void Writer::WriteBlock(const Block& block, std::size_t depth) {
                    [&](const ListBlock& b) { WriteList(b, depth + 1); },
                    [&](const Table& b) { WriteTable(b); },
                    [&](const ImageBlock& b) { WriteImageBlock(b); },
-                   [&](const HorizontalRule&) { Emit("---"); NewLine(); },
+                   [&](const HorizontalRule&) {
+                       // "***" when this is the first thing in the file. A
+                       // leading "---" is how every static-site generator and
+                       // most Markdown readers -- ours included until this was
+                       // found -- announce YAML front matter, so a document that
+                       // opens with a thematic break and has another one further
+                       // down loses everything between them. All three spellings
+                       // are the same thematic break; only this one is
+                       // unambiguous at the top of a file.
+                       Emit(out_.empty() ? "***" : "---");
+                       NewLine();
+                   },
                    [&](const Footnote& b) { WriteFootnote(b, depth); },
                    [&](const RawBlock& b) { WriteRaw(b); },
                },
@@ -326,7 +396,14 @@ void Writer::WriteHeading(const Heading& heading) {
     // would make the writer's output depend on the heading level for no gain.
     Emit(std::string(static_cast<std::size_t>(std::clamp(heading.level, 1, 6)), '#'));
     Emit(" ");
+    // AN ATX HEADING IS ONE LINE. A line break inside one has no spelling: the
+    // backslash we would emit ends the heading and the rest becomes a
+    // paragraph, so the document gains a heading it did not have and a stray
+    // backslash in the text. DOCX and HTML both produce this shape -- a heading
+    // with a <br> in it is ordinary -- so it is handled rather than avoided.
+    inHeading_ = true;
     WriteInlines(heading.inlines, /*atLineStart=*/false);
+    inHeading_ = false;
     NewLine();
 }
 
@@ -364,6 +441,9 @@ void Writer::WriteQuote(const BlockQuote& quote, std::size_t depth) {
 }
 
 void Writer::WriteList(const ListBlock& list, std::size_t depth) {
+    // Read once: writing the items recurses, and a nested list would otherwise
+    // consume the flag meant for this one.
+    const bool alternate = alternateListMarker_;
     int number = list.start;
 
     for (std::size_t i = 0; i < list.items.size(); ++i) {
@@ -373,11 +453,15 @@ void Writer::WriteList(const ListBlock& list, std::size_t depth) {
 
         std::string marker;
         if (list.ordered) {
-            marker = std::to_string(number++) + ". ";
+            // ')' rather than '.' for an alternating sibling: both are ordered
+            // markers and the change is what separates the two lists.
+            marker = std::to_string(number++) + (alternate ? ") " : ". ");
         } else {
             // Portable uses '-' throughout: '*' is also emphasis and '+' is
-            // handled inconsistently by older renderers.
-            marker = "- ";
+            // handled inconsistently by older renderers. '+' is the alternate
+            // anyway, because it is only reached when the alternative is two
+            // lists silently becoming one.
+            marker = alternate ? "+ " : "- ";
         }
         Emit(marker);
 
@@ -394,7 +478,7 @@ void Writer::WriteList(const ListBlock& list, std::size_t depth) {
 
         // Continuation lines line up under the text, not under the marker.
         PushPrefix(std::string(marker.size(), ' '));
-        WriteBlocks(item.blocks, depth);
+        WriteBlocks(item.blocks, depth, list.tight);
         PopPrefix();
         NewLine();
     }
@@ -448,11 +532,59 @@ void Writer::WriteTable(const Table& table) {
                 lost_blocks = true;
             }
 
-            std::string text = PlainText(cell.blocks);
+            // A cell holding one paragraph keeps its formatting. GFM allows
+            // emphasis, code spans and links inside a cell, and flattening them
+            // to plain text loses information the format can hold -- which is
+            // rule 1 in document.h read backwards. Anything more complicated
+            // than a paragraph still flattens, and says so above.
+            // A PIPE INSIDE A CODE SPAN cannot be escaped. Backslash escapes
+            // do not apply inside a code span, so "`a\|b`" is read back with
+            // the backslash still in it -- and an unescaped pipe would split the
+            // row. GFM's table extension unescapes it before inline parsing;
+            // md4c, which is our reader, does not. A writer that emits something
+            // its own reader cannot read is a bug whatever the specification
+            // says, so such a cell is flattened to plain text, where the escape
+            // does work, and the loss is reported.
+            bool unescapablePipe = false;
+            if (cell.blocks.size() == 1 && cell.blocks.front().Is<Paragraph>()) {
+                ForEachInline(cell.blocks.front().As<Paragraph>()->inlines,
+                              [&](const Inline& node) {
+                                  const auto* code = node.As<InlineCode>();
+                                  if (code != nullptr &&
+                                      code->text.find('|') != std::string::npos) {
+                                      unescapablePipe = true;
+                                  }
+                              });
+            }
+            if (unescapablePipe) lost_blocks = true;
+
+            std::string text;
+            if (!unescapablePipe && cell.blocks.size() == 1 &&
+                cell.blocks.front().Is<Paragraph>()) {
+                text = Capture(cell.blocks.front().As<Paragraph>()->inlines);
+            } else {
+                text = EscapeText(PlainText(cell.blocks), /*atLineStart=*/false, flavour_);
+            }
+
             // A table cell is a single line by construction.
             std::replace(text.begin(), text.end(), '\n', ' ');
             while (!text.empty() && text.back() == ' ') text.pop_back();
-            cells.push_back(EscapeText(text, /*atLineStart=*/false, flavour_));
+
+            // EscapeText already escaped the pipes it wrote, but a code span
+            // does not go through it: `a|b` inside a cell would split the row.
+            // Escaping what is not already escaped covers both paths.
+            std::string guarded;
+            guarded.reserve(text.size());
+            for (std::size_t i = 0; i < text.size(); ++i) {
+                if (text[i] == '\\' && i + 1 < text.size()) {
+                    guarded.push_back(text[i]);
+                    guarded.push_back(text[++i]);
+                    continue;
+                }
+                if (text[i] == '|') guarded.push_back('\\');
+                guarded.push_back(text[i]);
+            }
+            cells.push_back(std::move(guarded));
         }
         columns = std::max(columns, cells.size());
         grid.push_back(std::move(cells));
@@ -467,8 +599,8 @@ void Writer::WriteTable(const Table& table) {
     }
     if (lost_blocks) {
         Note("table-cell-flattened",
-             "Table cells containing lists, code or multiple paragraphs were flattened to a "
-             "single line.",
+             "Table cells containing lists, code with a pipe in it, or multiple paragraphs "
+             "were flattened to a single line.",
              Fidelity::Structural);
     }
 
@@ -575,9 +707,43 @@ void Writer::WriteRaw(const RawBlock& raw) {
          Fidelity::Structural);
 }
 
+namespace {
+
+// The first character this inline would contribute, or 0 when it contributes
+// none. Only used to decide whether a delimiter would land inside a word.
+char FirstCharacter(const Inline& node) {
+    if (const auto* text = node.As<Text>()) return text->text.empty() ? '\0' : text->text.front();
+    if (const auto* code = node.As<InlineCode>()) return '`';
+    if (const auto* e = node.As<Emphasis>()) {
+        return e->children.empty() ? '\0' : '*';
+    }
+    if (const auto* s = node.As<Strong>()) {
+        return s->children.empty() ? '\0' : '*';
+    }
+    return '\0';
+}
+
+bool IsWordCharacter(char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) != 0;
+}
+
+}  // namespace
+
 void Writer::WriteInlines(const Inlines& inlines, bool atLineStart) {
     bool line_start = atLineStart;
-    for (const Inline& node : inlines) {
+    for (std::size_t i = 0; i < inlines.size(); ++i) {
+        const Inline& node = inlines[i];
+        nextIsWord_ =
+            i + 1 < inlines.size() && IsWordCharacter(FirstCharacter(inlines[i + 1]));
+
+        // A hard break with nothing after it is not a break. CommonMark requires
+        // something on the next line, so the backslash we would emit is read
+        // back as a literal backslash -- which is how a paragraph ending in
+        // Shift+Enter grew a stray character on every round trip.
+        if (i + 1 == inlines.size()) {
+            if (const auto* br = node.As<LineBreak>(); br != nullptr && br->hard) continue;
+        }
+
         WriteInline(node, line_start);
         line_start = node.Is<LineBreak>();
     }
@@ -612,6 +778,27 @@ void Writer::WriteInline(const Inline& node, bool atLineStart) {
                 if (flavour_ == Flavour::kCommonMark) {
                     Note("strikethrough-dropped",
                          "CommonMark has no strikethrough, so the text was written unmarked.",
+                         Fidelity::Structural);
+                    WriteInlines(n.children, false);
+                    return;
+                }
+                // "~~" IS NOT VALID INTRAWORD, and this is the one delimiter
+                // where that is true: "aa*bb*cc" is emphasis but "aa~~bb~~cc"
+                // is four literal tildes. Writing them anyway does not merely
+                // lose the strikethrough -- it INSERTS TILDES INTO THE TEXT, so
+                // the round trip corrupts the words themselves, which is the
+                // worst outcome available.
+                //
+                // When either side sits against a word character the marks come
+                // off and the loss is reported instead. A fidelity note is
+                // something a user can see; a stray "~~" is something they file
+                // a bug about.
+                const bool followedByWord = nextIsWord_;
+                const bool precededByWord = !out_.empty() && IsWordCharacter(out_.back());
+                if (precededByWord || followedByWord) {
+                    Note("strikethrough-intraword",
+                         "Strikethrough that starts or ends in the middle of a word cannot be "
+                         "written in Markdown, so the text was written unmarked.",
                          Fidelity::Structural);
                     WriteInlines(n.children, false);
                     return;
@@ -656,6 +843,14 @@ void Writer::WriteInline(const Inline& node, bool atLineStart) {
                 Emit(")");
             },
             [&](const LineBreak& n) {
+                if (inHeading_) {
+                    Note("heading-line-break-flattened",
+                         "A line break inside a heading became a space; a Markdown heading is "
+                         "a single line.",
+                         Fidelity::Structural);
+                    Emit(" ");
+                    return;
+                }
                 // A backslash is the unambiguous hard break. Two trailing spaces
                 // also work and are invisible, which is why they are a bug
                 // magnet and why we do not emit them.

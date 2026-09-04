@@ -31,6 +31,12 @@ struct RunFormat {
     std::optional<bool> bold;
     std::optional<bool> italic;
     std::optional<bool> strike;
+    // A code span. WordprocessingML has no such element -- the convention is a
+    // character style, and the writer emits the one Word itself uses. Without
+    // this the round trip is asymmetric: our own writer emits a code span and
+    // our own reader hands back text in Consolas, so `x` survives docx -> docx
+    // and is lost by docx -> anything else.
+    std::optional<bool> code;
     doc::TextStyle style;
 
     // Values already set here win; `under` supplies the rest.

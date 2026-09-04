@@ -286,6 +286,28 @@ Overloaded(Ts...) -> Overloaded<Ts...>;
 void ForEachBlock(const Blocks& blocks, const std::function<void(const Block&)>& visit);
 void ForEachInline(const Inlines& inlines, const std::function<void(const Inline&)>& visit);
 
+// --- Canonical form ----------------------------------------------------------
+
+// THE IR HAS A CANONICAL FORM, and readers are responsible for producing it.
+// Two things are normalised, both because the alternative spelling carries no
+// information and both because leaving them alone breaks writers:
+//
+//   ADJACENT TEXT RUNS with the same style are one run. No format here has
+//   syntax for "two text nodes touching", so a document that has them cannot be
+//   written and read back unchanged.
+//
+//   ADJACENT WRAPPERS of the same kind are one wrapper. This one is not
+//   cosmetic. Emphasis followed by Emphasis is written as "*one**two*", and the
+//   doubled asterisk in the middle is read back as a bold delimiter -- the span
+//   inverts. Strikethrough is worse: "~~one~~~~two~~" is not a strikethrough at
+//   all and comes back as literal tildes.
+//
+// It is a normalisation rather than a repair inside each writer because every
+// writer would otherwise need its own copy of the rule, and the first one to
+// forget it produces a file that is silently wrong rather than one that fails.
+void Normalise(Inlines& inlines);
+void Normalise(Blocks& blocks);
+
 // Every resource id referenced anywhere in the document, in first-appearance
 // order. Feeds ResourceStore::Retain and the assets-directory writer.
 [[nodiscard]] std::vector<ResourceId> ReferencedResources(const Document& document);

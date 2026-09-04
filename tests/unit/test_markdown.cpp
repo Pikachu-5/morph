@@ -600,3 +600,129 @@ TEST_CASE("a horizontal rule is not mistaken for front matter",
     CHECK(d.meta.title.empty());
     CHECK(PlainText(d.blocks).find("Just a rule") != std::string::npos);
 }
+
+TEST_CASE("Table cells keep their formatting", "[markdown]") {
+    // GFM allows emphasis, code spans and links inside a cell. Writing the cell
+    // as plain text loses information the format can hold, which is rule 1 in
+    // document.h read backwards.
+    Document document;
+    Table table;
+    table.columns.resize(1);
+    table.headerRows = 1;
+    for (int row = 0; row < 2; ++row) {
+        TableRow line;
+        TableCell cell;
+        Paragraph paragraph;
+        paragraph.inlines.push_back(Inline::Of(Text{"a ", {}}));
+        paragraph.inlines.push_back(Inline::Of(Strong{{Inline::Of(Text{"bold", {}})}}));
+        paragraph.inlines.push_back(Inline::Of(Text{" and ", {}}));
+        paragraph.inlines.push_back(Inline::Of(InlineCode{"code"}));
+        cell.blocks.push_back(Block::Of(std::move(paragraph)));
+        line.cells.push_back(std::move(cell));
+        table.rows.push_back(std::move(line));
+    }
+    document.blocks.push_back(Block::Of(std::move(table)));
+
+    std::string markdown;
+    REQUIRE(WriteMarkdown(document, {}, markdown).ok());
+    CHECK(markdown.find("**bold**") != std::string::npos);
+    CHECK(markdown.find("`code`") != std::string::npos);
+
+    Document read;
+    REQUIRE(ReadMarkdown(markdown, {}, read).ok());
+    const Table* back = read.blocks.front().As<Table>();
+    REQUIRE(back != nullptr);
+    const Inlines& cell = back->rows[0].cells[0].blocks[0].As<Paragraph>()->inlines;
+    REQUIRE(cell.size() == 4);
+    CHECK(cell[1].Is<Strong>());
+    REQUIRE(cell[3].Is<InlineCode>());
+    CHECK(cell[3].As<InlineCode>()->text == "code");
+}
+
+TEST_CASE("A document may begin with a horizontal rule", "[markdown]") {
+    // "---" on the first line is also how YAML front matter opens, and a second
+    // rule further down closes it. Treating that as front matter deletes
+    // everything between the two rules, which is most of the document.
+    Document read;
+    REQUIRE(ReadMarkdown("---\n\nfirst\n\n---\n\nsecond\n", {}, read).ok());
+    REQUIRE(read.blocks.size() == 4);
+    CHECK(read.blocks[0].Is<HorizontalRule>());
+    CHECK(PlainText(read.blocks).find("first") != std::string::npos);
+    CHECK(PlainText(read.blocks).find("second") != std::string::npos);
+
+    // Real front matter still works.
+    Document meta;
+    REQUIRE(ReadMarkdown("---\ntitle: Report\n---\n\nbody\n", {}, meta).ok());
+    CHECK(meta.meta.title == "Report");
+    REQUIRE(meta.blocks.size() == 1);
+
+    // And our own writer does not produce the ambiguity in the first place.
+    Document leading;
+    leading.blocks.push_back(Block::Of(HorizontalRule{}));
+    leading.blocks.push_back(Block::Of(Paragraph{{Inline::Of(Text{"after", {}})}, {}, {}, {}}));
+    std::string written;
+    REQUIRE(WriteMarkdown(leading, {}, written).ok());
+    CHECK(written.starts_with("***"));
+}
+
+TEST_CASE("Strikethrough that cannot be written says so", "[markdown]") {
+    // "~~" is the one delimiter that does not work intraword: "aa*bb*cc" is
+    // emphasis but "aa~~bb~~cc" is four literal tildes. Writing them anyway
+    // would put tildes into the user's text.
+    Document document;
+    Paragraph paragraph;
+    paragraph.inlines.push_back(Inline::Of(Text{"runs", {}}));
+    paragraph.inlines.push_back(Inline::Of(Strikethrough{{Inline::Of(Text{"gone", {}})}}));
+    paragraph.inlines.push_back(Inline::Of(Text{"more", {}}));
+    document.blocks.push_back(Block::Of(std::move(paragraph)));
+
+    std::string markdown;
+    const Result result = WriteMarkdown(document, {}, markdown);
+    REQUIRE(result.ok());
+    CHECK(markdown.find("~~") == std::string::npos);
+    CHECK(markdown.find("runsgonemore") != std::string::npos);
+
+    bool reported = false;
+    for (const auto& note : result.notes()) {
+        if (note.code == "strikethrough-intraword") reported = true;
+    }
+    CHECK(reported);
+}
+
+TEST_CASE("A pipe inside a code span flattens its cell", "[markdown]") {
+    // Backslash escapes do not apply inside a code span, so an escaped pipe
+    // comes back with the backslash still in it -- and an unescaped one splits
+    // the row. The cell is flattened to plain text, where the escape works, and
+    // the loss is reported rather than silent.
+    Document document;
+    Table table;
+    table.columns.resize(1);
+    table.headerRows = 1;
+    for (int row = 0; row < 2; ++row) {
+        TableRow line;
+        TableCell cell;
+        Paragraph paragraph;
+        paragraph.inlines.push_back(Inline::Of(InlineCode{"a|b"}));
+        cell.blocks.push_back(Block::Of(std::move(paragraph)));
+        line.cells.push_back(std::move(cell));
+        table.rows.push_back(std::move(line));
+    }
+    document.blocks.push_back(Block::Of(std::move(table)));
+
+    std::string markdown;
+    const Result result = WriteMarkdown(document, {}, markdown);
+    REQUIRE(result.ok());
+
+    Document read;
+    REQUIRE(ReadMarkdown(markdown, {}, read).ok());
+    const Table* back = read.blocks.front().As<Table>();
+    REQUIRE(back != nullptr);
+    // The pipe is still the user's text, which is the part that matters.
+    CHECK(PlainText(back->rows[0].cells[0].blocks).find("a|b") != std::string::npos);
+
+    bool reported = false;
+    for (const FidelityNote& note : result.notes()) {
+        reported |= note.code == "table-cell-flattened";
+    }
+    CHECK(reported);
+}

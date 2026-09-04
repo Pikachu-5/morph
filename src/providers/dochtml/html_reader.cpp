@@ -773,6 +773,7 @@ Result ReadHtml(std::string_view html, const OptionBag& /*options*/, doc::Docume
                         inlines, 0);
         reader.Flush(blocks, inlines);
         into.blocks = std::move(blocks);
+        doc::Normalise(into.blocks);
         return result;
     }
 
@@ -781,6 +782,9 @@ Result ReadHtml(std::string_view html, const OptionBag& /*options*/, doc::Docume
     reader.ReadNode(lxb_dom_interface_node(body), blocks, inlines, 0);
     reader.Flush(blocks, inlines);
     into.blocks = std::move(blocks);
+    // See document.h: adjacent same-kind spans are one span. The HTML reader
+    // produces them routinely, because <em>a</em><em>b</em> is legal markup.
+    doc::Normalise(into.blocks);
     return result;
 }
 

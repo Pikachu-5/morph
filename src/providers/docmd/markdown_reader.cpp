@@ -792,6 +792,7 @@ Result ReadMarkdown(std::string_view text, const OptionBag& options, doc::Docume
     // means a resource limit. Markdown itself has no parse errors: every byte
     // sequence is a valid document.
     Result result = builder.Finish();
+    doc::Normalise(into.blocks);
     if (rc != 0 && result.ok()) {
         return Result::Error(Status::kResourceLimit,
                              "Stopped reading the Markdown document at a structural limit.");

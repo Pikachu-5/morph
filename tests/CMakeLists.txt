@@ -30,6 +30,7 @@ add_executable(morph_tests
     unit/test_capability_table.cpp
     unit/test_shell_menu.cpp
     unit/test_broker_scheduling.cpp
+    property/test_ir_roundtrip.cpp
     integration/test_broker_end_to_end.cpp
 )
 

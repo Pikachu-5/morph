@@ -90,12 +90,13 @@ void RunFormat::Underlay(const RunFormat& under) {
     UnderlayField(bold, under.bold);
     UnderlayField(italic, under.italic);
     UnderlayField(strike, under.strike);
+    UnderlayField(code, under.code);
     style.Underlay(under.style);
 }
 
 bool RunFormat::SameAs(const RunFormat& other) const {
     return bold == other.bold && italic == other.italic && strike == other.strike &&
-           style == other.style;
+           code == other.code && style == other.style;
 }
 
 RunFormat ParseRunProperties(const pugi::xml_node& rPr) {
@@ -334,7 +335,11 @@ bool StyleResolver::IsCodeStyle(std::string_view styleId) const {
     // templates write some spelling of "source code".
     static constexpr std::string_view kCodeNames[] = {
         "sourcecode", "source code", "htmlpreformatted", "html preformatted",
-        "preformattedtext", "preformatted text", "code", "codeblock", "code block"};
+        "preformattedtext", "preformatted text", "code", "codeblock", "code block",
+        // Word's own character style for an inline code span, and what our
+        // writer emits, so that a code span comes back as a code span rather
+        // than as text that happens to be in Consolas.
+        "htmlcode", "html code"};
 
     for (const RawStyle* style : Chain(styleId)) {
         const std::string id = ToLowerAscii(style->id);

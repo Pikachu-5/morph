@@ -669,3 +669,88 @@ TEST_CASE("a dropped code language is reported", "[docx][fidelity]") {
         CHECK(note.code != "code-language-dropped");
     }
 }
+
+TEST_CASE("A code span survives a Word round trip", "[docx]") {
+    // WordprocessingML has no code-span element, so the writer marks the run
+    // with a character style. Marking it only with a monospace FONT is a guess
+    // the reader cannot safely act on, and without the style `x` came back as
+    // ordinary text in Consolas -- lost the moment it was written anywhere else.
+    Document document;
+    Paragraph paragraph;
+    paragraph.inlines.push_back(Inline::Of(Text{"call ", {}}));
+    paragraph.inlines.push_back(Inline::Of(InlineCode{"main()"}));
+    document.blocks.push_back(Block::Of(std::move(paragraph)));
+
+    const std::vector<std::byte> package = Write(document);
+    CHECK(DocumentXml(package).find(R"(<w:rStyle w:val="HTMLCode"/>)") != std::string::npos);
+
+    const Document back = Read(package);
+    const Inlines& inlines = back.blocks.front().As<Paragraph>()->inlines;
+    REQUIRE(inlines.size() == 2);
+    REQUIRE(inlines[1].Is<InlineCode>());
+    CHECK(inlines[1].As<InlineCode>()->text == "main()");
+}
+
+TEST_CASE("A code span inside a link stays a code span", "[docx]") {
+    // A run carries ONE character style. Emitting both the hyperlink style and
+    // the code style produced two w:rStyle elements, which is not valid and
+    // which a reader resolves by taking the first -- so the code span silently
+    // became link text.
+    Document document;
+    Paragraph paragraph;
+    Link link;
+    link.target = "https://example.com/";
+    link.children.push_back(Inline::Of(InlineCode{"code"}));
+    paragraph.inlines.push_back(Inline::Of(std::move(link)));
+    document.blocks.push_back(Block::Of(std::move(paragraph)));
+
+    const Document back = RoundTrip(document);
+    const Inlines& inlines = back.blocks.front().As<Paragraph>()->inlines;
+    REQUIRE(inlines.size() == 1);
+    REQUIRE(inlines[0].Is<Link>());
+    const Inlines& inner = inlines[0].As<Link>()->children;
+    REQUIRE(inner.size() == 1);
+    CHECK(inner[0].Is<InlineCode>());
+}
+
+TEST_CASE("A horizontal rule survives a Word round trip", "[docx]") {
+    // The writer has always emitted Word's own spelling for a rule -- an empty
+    // paragraph with a bottom border -- and the reader had no ear for it, so
+    // every rule became an empty paragraph and vanished.
+    Document document;
+    document.blocks.push_back(Block::Of(Paragraph{{Inline::Of(Text{"above", {}})}, {}, {}, {}}));
+    document.blocks.push_back(Block::Of(HorizontalRule{}));
+    document.blocks.push_back(Block::Of(Paragraph{{Inline::Of(Text{"below", {}})}, {}, {}, {}}));
+
+    const Document back = RoundTrip(document);
+    REQUIRE(back.blocks.size() == 3);
+    CHECK(back.blocks[1].Is<HorizontalRule>());
+}
+
+TEST_CASE("An item whose only content is a list keeps its place", "[docx]") {
+    // The flat encoding needs a numbered paragraph to say "this item exists",
+    // and it needs it BEFORE the nested list's paragraphs. Emitted afterwards,
+    // the nested list attaches to the previous item on the way back in and the
+    // empty paragraph reads as a trailing empty item.
+    ListBlock inner;
+    inner.ordered = false;
+    inner.items.push_back(
+        ListItem{{Block::Of(Paragraph{{Inline::Of(Text{"deep", {}})}, {}, {}, {}})}, {}});
+
+    ListBlock outer;
+    outer.ordered = false;
+    outer.items.push_back(
+        ListItem{{Block::Of(Paragraph{{Inline::Of(Text{"first", {}})}, {}, {}, {}})}, {}});
+    outer.items.push_back(ListItem{{Block::Of(std::move(inner))}, {}});
+
+    Document document;
+    document.blocks.push_back(Block::Of(std::move(outer)));
+
+    const Document back = RoundTrip(document);
+    REQUIRE(back.blocks.size() == 1);
+    const ListBlock* list = back.blocks[0].As<ListBlock>();
+    REQUIRE(list != nullptr);
+    REQUIRE(list->items.size() == 2);
+    CHECK(list->items[1].blocks.size() == 1);
+    CHECK(list->items[1].blocks[0].Is<ListBlock>());
+}
