@@ -1,5 +1,7 @@
 #include "providers.h"
 
+#include "morph/core/probe_cache.h"
+
 #include "morph/providers/docx.h"
 #include "morph/providers/html.h"
 #include "morph/providers/markdown.h"
@@ -117,6 +119,12 @@ void Providers::ProbeCapabilities() {
     if (ffmpeg::InstalledTools().Present()) capabilities_.Add("ffmpeg");
 
     graph_.RemoveProviderEdges(unavailable);
+
+    // Everything above either read a remembered answer or worked one out; this
+    // is where the ones that were worked out get written down. Section 17
+    // budgets 150 ms for a broker cold start and the probes alone were taking
+    // 965 of them (probe_cache.h).
+    ProbeCache::Instance().Flush();
 }
 
 }  // namespace morph::worker

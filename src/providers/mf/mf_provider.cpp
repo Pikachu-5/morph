@@ -14,6 +14,7 @@
 #include <wrl/client.h>
 
 #include "morph/core/extensions.h"
+#include "morph/core/probe_cache.h"
 #include "morph/core/stream.h"
 #include "morph/providers/com_stream.h"
 #include "mf_formats.h"
@@ -356,11 +357,25 @@ EncoderSupport ProbeEncoders() {
     EncoderSupport support;
     if (!StartRuntime()) return support;
 
-    support.h264 = CanEncode(MFT_CATEGORY_VIDEO_ENCODER, MFVideoFormat_H264, Media::kVideo);
-    support.hevc = CanEncode(MFT_CATEGORY_VIDEO_ENCODER, MFVideoFormat_HEVC, Media::kVideo);
-    support.aac = CanEncode(MFT_CATEGORY_AUDIO_ENCODER, MFAudioFormat_AAC, Media::kAudio);
-    support.mp3 = CanEncode(MFT_CATEGORY_AUDIO_ENCODER, MFAudioFormat_MP3, Media::kAudio);
-    support.wma = CanEncode(MFT_CATEGORY_AUDIO_ENCODER, MFAudioFormat_WMAudioV9, Media::kAudio);
+    // Each of these negotiates media types with a real encoder, which is why
+    // the answer is remembered across runs (probe_cache.h): it is the same
+    // answer until Windows or Morph changes, and asking costs most of a broker
+    // cold start.
+    support.h264 = Cached("mf.h264.encode", [] {
+        return CanEncode(MFT_CATEGORY_VIDEO_ENCODER, MFVideoFormat_H264, Media::kVideo);
+    });
+    support.hevc = Cached("mf.hevc.encode", [] {
+        return CanEncode(MFT_CATEGORY_VIDEO_ENCODER, MFVideoFormat_HEVC, Media::kVideo);
+    });
+    support.aac = Cached("mf.aac.encode", [] {
+        return CanEncode(MFT_CATEGORY_AUDIO_ENCODER, MFAudioFormat_AAC, Media::kAudio);
+    });
+    support.mp3 = Cached("mf.mp3.encode", [] {
+        return CanEncode(MFT_CATEGORY_AUDIO_ENCODER, MFAudioFormat_MP3, Media::kAudio);
+    });
+    support.wma = Cached("mf.wma.encode", [] {
+        return CanEncode(MFT_CATEGORY_AUDIO_ENCODER, MFAudioFormat_WMAudioV9, Media::kAudio);
+    });
     // PCM needs no encoder: the WAV sink writes the samples it is handed.
     support.wav = true;
     return support;

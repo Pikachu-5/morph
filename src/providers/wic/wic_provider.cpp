@@ -12,6 +12,7 @@
 #include <wincodecsdk.h>
 #include <wrl/client.h>
 
+#include "morph/core/probe_cache.h"
 #include "morph/core/stream.h"
 #include "morph/providers/com_stream.h"
 
@@ -201,21 +202,37 @@ CodecSupport ProbeCodecs() {
     if (FAILED(CreateFactory(factory)) || !factory) return support;
 
     // Decoding is enumerable: a decoder that is registered decodes. Encoding is
-    // not, so every gated encoder is tried rather than asked about.
-    support.heifDecode = HasComponentFor(*factory.Get(), WICDecoder, GUID_ContainerFormatHeif);
-    support.heifEncode = HasComponentFor(*factory.Get(), WICEncoder, GUID_ContainerFormatHeif) &&
-                         TrialEncode(*factory.Get(), GUID_ContainerFormatHeif);
+    // not, so every gated encoder is tried rather than asked about -- and a
+    // trial encode is the expensive part, which is why the answers are
+    // remembered across runs (probe_cache.h).
+    IWICImagingFactory& raw = *factory.Get();
 
-    support.webpDecode = HasComponentFor(*factory.Get(), WICDecoder, GUID_ContainerFormatWebp);
-    support.webpEncode = HasComponentFor(*factory.Get(), WICEncoder, GUID_ContainerFormatWebp) &&
-                         TrialEncode(*factory.Get(), GUID_ContainerFormatWebp);
+    support.heifDecode = Cached("wic.heif.decode", [&raw] {
+        return HasComponentFor(raw, WICDecoder, GUID_ContainerFormatHeif);
+    });
+    support.heifEncode = Cached("wic.heif.encode", [&raw] {
+        return HasComponentFor(raw, WICEncoder, GUID_ContainerFormatHeif) &&
+               TrialEncode(raw, GUID_ContainerFormatHeif);
+    });
 
+    support.webpDecode = Cached("wic.webp.decode", [&raw] {
+        return HasComponentFor(raw, WICDecoder, GUID_ContainerFormatWebp);
+    });
+    support.webpEncode = Cached("wic.webp.encode", [&raw] {
+        return HasComponentFor(raw, WICEncoder, GUID_ContainerFormatWebp) &&
+               TrialEncode(raw, GUID_ContainerFormatWebp);
+    });
+
+    // AVIF's container GUID is looked up by name, and the lookup is also the
+    // decode probe -- so unlike the others it is not cached as a bare bool: the
+    // GUID itself is needed at conversion time and enumerating for it is cheap.
     GUID avif{};
-    if (FindContainerByName(*factory.Get(), WICDecoder, L"AVIF", avif)) {
+    if (FindContainerByName(raw, WICDecoder, L"AVIF", avif)) {
         gAvifContainer = avif;
         support.avifDecode = true;
-        support.avifEncode = HasComponentFor(*factory.Get(), WICEncoder, avif) &&
-                             TrialEncode(*factory.Get(), avif);
+        support.avifEncode = Cached("wic.avif.encode", [&raw, &avif] {
+            return HasComponentFor(raw, WICEncoder, avif) && TrialEncode(raw, avif);
+        });
     }
     return support;
 }

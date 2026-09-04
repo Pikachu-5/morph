@@ -14,6 +14,7 @@ add_library(morph_core STATIC
     src/io/options.cpp
     src/io/provider.cpp
     src/io/temp_store.cpp
+    src/io/probe_cache.cpp
     src/io/executor.cpp
     src/doc/style.cpp
     src/doc/resource.cpp

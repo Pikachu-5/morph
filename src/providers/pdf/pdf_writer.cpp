@@ -16,6 +16,8 @@
 #include <windows.h>
 
 #include "morph/providers/pdf.h"
+
+#include "morph/core/probe_cache.h"
 #include "webview2_host.h"
 
 namespace morph::pdf {
@@ -73,7 +75,14 @@ PageGeometry GeometryFor(const OptionBag& options) {
 
 }  // namespace
 
-bool WebView2Available() { return StartHost().ok(); }
+bool WebView2Available() {
+    // Remembered across runs (probe_cache.h). Starting the host is what makes
+    // this answer trustworthy and is also most of what makes it slow, and the
+    // answer only changes when the Evergreen runtime is installed or removed --
+    // which comes with a Windows build or an installer, both of which move the
+    // cache's stamp.
+    return Cached("pdf.webview2", [] { return StartHost().ok(); });
+}
 
 std::string WebView2Version() { return HostVersion(); }
 

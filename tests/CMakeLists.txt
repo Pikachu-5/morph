@@ -19,6 +19,7 @@ add_executable(morph_tests
     unit/test_mf.cpp
     unit/test_ffmpeg.cpp
     unit/test_hostile_input.cpp
+    unit/test_probe_cache.cpp
     unit/test_pdf.cpp
     unit/test_pdf_reader.cpp
     unit/test_ipc.cpp
@@ -32,6 +33,7 @@ add_executable(morph_tests
 )
 
 add_subdirectory(fuzz)
+add_subdirectory(bench)
 
 target_include_directories(morph_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 

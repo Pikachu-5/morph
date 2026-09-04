@@ -36,6 +36,7 @@ Pre-M0. What exists today:
 | A/V provider — Media Foundation, remux fast path (§7.1) | Implemented |
 | FFmpeg backend — subprocess, remux fast path (§7.2) | Implemented, no binary shipped |
 | Fuzz targets and the hostile-input corpus (§15, §16) | Implemented |
+| Performance budgets, measured (§17) | Implemented, one budget missed |
 | `Morph.App.exe` | Not started |
 
 382 tests green (`ctest --preset x64-debug`), including one that starts the
@@ -119,6 +120,34 @@ client that fails to connect starts it (§10.3). To watch one work:
 It exits after sixty seconds with no clients and no queued work. `--idle-seconds`
 shortens that, and is what the end-to-end test passes so that a test run does not
 leave a broker sitting in the session for a minute.
+
+## Performance
+
+`morph.bench.exe` measures §17's budgets on the machine it runs on, and
+`--gate` makes it exit non-zero when one is missed. On a release build of this
+machine:
+
+| Budget (§17) | Measured | Target |
+| --- | --- | --- |
+| Context menu, 100 files selected | 0.004 ms | ≤ 8 ms |
+| Broker cold start to accepting jobs | 94 ms | ≤ 150 ms |
+| 4000×3000 JPEG → PNG | 166 ms | ≤ 120 ms |
+| 40-page DOCX → PDF, warm | 303 ms | ≤ 1500 ms |
+| Broker idle private bytes | 1.2 MB | ≤ 12 MB |
+
+Two of these are worth a note. The broker cold start was 988 ms until the
+capability probes — a WebView2 detection, three trial image encodes and five
+media-type negotiations — were given somewhere to remember their answers; §11.4
+already established that pattern for cost estimates. The cache is a readable file
+in `%LOCALAPPDATA%\Morph`, stamped with the Windows build and the binary that
+wrote it, so a new codec pack or a rebuilt Morph re-probes.
+
+The image budget is missed and is a target rather than a measurement, in §17's
+own words. Of the 166 ms, roughly 45 ms is the JPEG decode and the rest is
+encoding twelve megapixels of PNG; hitting 120 ms through WIC means asking for
+cheaper filtering and accepting a larger file, which is a trade this project
+should make deliberately rather than to satisfy a number written before anything
+existed to measure.
 
 ## Decisions taken beyond the document
 
