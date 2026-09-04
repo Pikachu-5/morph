@@ -1,5 +1,7 @@
 #include "morph/core/stream.h"
 
+#include "morph/core/path_safety.h"
+
 #include <algorithm>
 #include <cstring>
 #include <system_error>
@@ -80,6 +82,15 @@ std::optional<std::uint64_t> FileSource::Size() const { return size_; }
 
 FileSink::FileSink(std::filesystem::path destination)
     : destination_(std::move(destination)), handle_(INVALID_HANDLE_VALUE) {
+    // Section 15.2, checked at the last place a name can still be refused. Every
+    // caller above this -- the broker's OutputPolicy, the CLI, a provider
+    // writing a sidecar -- reaches CreateFileW through here, and a device name
+    // that gets this far opens successfully and swallows the whole conversion.
+    if (const auto verdict = io::CheckDestination(destination_); !verdict.ok) {
+        throw std::system_error(std::make_error_code(std::errc::invalid_argument),
+                                verdict.reason);
+    }
+
     // Scratch file next to the destination, so Commit's rename stays on one
     // volume and is therefore atomic. A scratch file in %TEMP% would degrade to
     // a copy across volumes, which is neither atomic nor cheap.

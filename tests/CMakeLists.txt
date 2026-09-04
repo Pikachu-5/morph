@@ -19,6 +19,7 @@ add_executable(morph_tests
     unit/test_mf.cpp
     unit/test_ffmpeg.cpp
     unit/test_hostile_input.cpp
+    unit/test_path_safety.cpp
     unit/test_probe_cache.cpp
     unit/test_pdf.cpp
     unit/test_pdf_reader.cpp

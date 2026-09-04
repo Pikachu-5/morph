@@ -20,6 +20,7 @@
 
 #include "morph/core/executor.h"
 #include "morph/core/extensions.h"
+#include "morph/core/path_safety.h"
 #include "morph/core/planner.h"
 #include "morph/core/stream.h"
 #include "morph/core/temp_store.h"
@@ -257,6 +258,14 @@ int Formats(worker::Providers& providers) {
 }
 
 int Convert(worker::Providers& providers, const Options& options) {
+    // Section 15.2. FileSink refuses this too, but it does so a minute into a
+    // video by throwing, and the person who typed the path deserves the answer
+    // before the work starts rather than after it is thrown away.
+    if (const auto verdict = io::CheckDestination(options.output); !verdict.ok) {
+        PrintError(verdict.reason);
+        return 2;
+    }
+
     PathHint hint;
     hint.filename = options.input.filename().string();
     hint.extension = options.input.extension().string();

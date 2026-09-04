@@ -4,6 +4,7 @@
 #include <system_error>
 
 #include "morph/core/extensions.h"
+#include "morph/core/path_safety.h"
 
 namespace morph::broker {
 namespace {
@@ -11,24 +12,11 @@ namespace {
 // Characters Windows will not accept in a file name, plus the ones that are
 // legal but arrive from a media profile: "application/docx" has a slash in it
 // and {target} is allowed in a template.
-std::string Sanitised(std::string_view text) {
-    std::string out;
-    out.reserve(text.size());
-    for (const char c : text) {
-        switch (c) {
-            case '<': case '>': case ':': case '"': case '/':
-            case '\\': case '|': case '?': case '*':
-                out.push_back('-');
-                break;
-            default:
-                // Control characters are not legal in a name either, and a
-                // filename carrying one is a sign someone is trying something.
-                out.push_back(static_cast<unsigned char>(c) < 0x20 ? '-' : c);
-                break;
-        }
-    }
-    return out;
-}
+//
+// Section 15.2's device names are handled by the same call, which is why the
+// substitution below sanitises the FRAGMENTS and the finished name sanitises
+// again: a stem of "nul" is safe until the template puts ".pdf" after it.
+std::string Sanitised(std::string_view text) { return io::SafeComponent(text); }
 
 }  // namespace
 
@@ -87,9 +75,13 @@ OutputPlan ResolveOutput(const std::filesystem::path& input, const std::string& 
         policy.directory.empty() ? input.parent_path() : std::filesystem::path(policy.directory);
     if (directory.empty()) directory = std::filesystem::current_path();
 
-    const std::string name =
+    // Sanitised twice, deliberately: once on the fragments, so a hostile stem
+    // cannot inject a separator and escape the directory, and once on the
+    // assembled name, because the template chooses the final spelling and is the
+    // only thing that knows whether "nul" ended up in front of a dot.
+    const std::string name = Sanitised(
         ApplyTemplate(policy.namingTemplate.empty() ? "{name}.{ext}" : policy.namingTemplate,
-                      Sanitised(input.stem().string()), extension, index, targetProfile);
+                      Sanitised(input.stem().string()), extension, index, targetProfile));
     if (name.empty()) {
         plan.error = "The naming template produced an empty file name.";
         return plan;

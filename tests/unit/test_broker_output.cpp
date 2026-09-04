@@ -160,3 +160,32 @@ TEST_CASE("Nothing is allowed to write over its own input", "[broker][output]") 
     const OutputPlan plan = ResolveOutput(input, "text/html", policy, 0, taken);
     CHECK_FALSE(plan.error.empty());
 }
+
+TEST_CASE("An output name is never a device name", "[broker][output]") {
+    // A file called nul.md is creatable -- through \?\, or by any of the
+    // several archive formats that do not validate names -- and Explorer will
+    // happily show it. Converting it must not name the output after a device.
+    Sandbox sandbox("device");
+    const std::filesystem::path input = sandbox.root() / "nul.md";
+
+    std::vector<std::filesystem::path> taken;
+    const OutputPlan plan = ResolveOutput(input, "application/pdf", DefaultPolicy(), 0, taken);
+    REQUIRE(plan.error.empty());
+    CHECK(plan.path.filename() == "nul_.pdf");
+}
+
+TEST_CASE("A template cannot produce a name Windows would rewrite", "[broker][output]") {
+    Sandbox sandbox("template");
+    const std::filesystem::path input = sandbox.root() / "notes.md";
+
+    ipc::OutputPolicy policy = DefaultPolicy();
+    // A trailing dot is a plausible typo in a preference, and Win32 stores the
+    // result without it. If the plan kept the typed spelling it would report a
+    // path that does not exist and miss the next collision on the real one.
+    policy.namingTemplate = "{name}.{ext}.";
+
+    std::vector<std::filesystem::path> taken;
+    const OutputPlan plan = ResolveOutput(input, "application/pdf", policy, 0, taken);
+    REQUIRE(plan.error.empty());
+    CHECK(plan.path.filename() == "notes.pdf");
+}

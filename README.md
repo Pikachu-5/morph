@@ -39,9 +39,9 @@ Pre-M0. What exists today:
 | Performance budgets, measured (§17) | Implemented, one budget missed |
 | `Morph.App.exe` | Not started |
 
-386 tests green (`ctest --preset x64-debug`), including one that starts the
+392 tests green (`ctest --preset x64-debug`), including one that starts the
 broker, lets it start a worker, and converts a real file over the real pipe. The
-same 386 pass under AddressSanitizer (`.\tools\build.ps1 -Preset x64-asan`),
+same 392 pass under AddressSanitizer (`.\tools\build.ps1 -Preset x64-asan`),
 which is the configuration the hostile-input corpus is worth running in.
 
 Markdown, HTML and DOCX convert to each other in every direction, all three
