@@ -13,7 +13,7 @@
 #include <wrl/client.h>
 
 #include "morph/core/stream.h"
-#include "wic_stream.h"
+#include "morph/providers/com_stream.h"
 
 namespace morph::wic {
 namespace {
@@ -164,7 +164,7 @@ bool TrialEncode(IWICImagingFactory& factory, const GUID& container) {
         return false;
     }
 
-    MemoryStream sink;
+    comio::MemoryStream sink;
     ComPtr<IWICBitmapEncoder> encoder;
     if (FAILED(factory.CreateEncoder(container, nullptr, &encoder))) return false;
     if (FAILED(encoder->Initialize(&sink, WICBitmapEncoderNoCache))) return false;
@@ -483,7 +483,7 @@ Result WicProvider::Convert(ConvertContext& context, ISource& source, ISink& sin
     context.progress.Report(0.0, 0);
 
     // --- Decode --------------------------------------------------------------
-    SourceStream input(source);
+    comio::SourceStream input(source);
     ComPtr<IWICBitmapDecoder> decoder;
     if (const HRESULT hr = factory->CreateDecoderFromStream(
             &input, nullptr, WICDecodeMetadataCacheOnDemand, &decoder);
@@ -551,7 +551,7 @@ Result WicProvider::Convert(ConvertContext& context, ISource& source, ISink& sin
     }
 
     // --- Encode --------------------------------------------------------------
-    MemoryStream output;
+    comio::MemoryStream output;
     ComPtr<IWICBitmapEncoder> encoder;
     if (const HRESULT hr = factory->CreateEncoder(*container, nullptr, &encoder); FAILED(hr)) {
         return Failed(hr, "Starting the " + to.Id() + " encoder");

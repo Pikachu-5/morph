@@ -1,9 +1,15 @@
 // IStream adapters (architecture section 5's ISource/ISink meeting COM).
 //
-// WIC speaks IStream and Morph speaks ISource/ISink, and neither is going to
+// Windows speaks IStream and Morph speaks ISource/ISink, and neither is going to
 // change for the other. These are the two adapters that meet in the middle.
 //
-// Only the methods WIC actually calls are implemented; the rest return
+// Shared rather than owned by one provider, because both COM-facing providers
+// need exactly this: WIC decodes from an IStream, and Media Foundation wraps one
+// with MFCreateMFByteStreamOnStream. They are in a provider-support library
+// rather than in morph.core, which is deliberately free of COM (see
+// src/core/CMakeLists.txt).
+//
+// Only the methods these callers actually use are implemented; the rest return
 // E_NOTIMPL rather than pretending. An adapter that silently succeeds at
 // something it did not do is worse than one that says no.
 #pragma once
@@ -17,7 +23,7 @@
 
 #include "morph/core/stream.h"
 
-namespace morph::wic {
+namespace morph::comio {
 
 // Read-only, over an ISource. Tracks its own position because ISource has a
 // Seek but no Tell -- a decoder that seeks backwards for a directory entry (TIFF
@@ -101,4 +107,4 @@ private:
     LONG references_ = 1;
 };
 
-}  // namespace morph::wic
+}  // namespace morph::comio

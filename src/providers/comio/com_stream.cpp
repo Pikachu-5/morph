@@ -1,15 +1,17 @@
-#include "wic_stream.h"
+#include "morph/providers/com_stream.h"
 
 #include <algorithm>
 #include <cstring>
 #include <limits>
 
-namespace morph::wic {
+namespace morph::comio {
 namespace {
 
-// The largest image Morph will hold in memory while encoding. A 40000x40000 PNG
-// is section 6.2's example of a file that "must fail cleanly, not OOM the
-// worker"; the job object catches the decode side, and this catches the encode.
+// The largest thing MemoryStream will hold. Section 6.2's example is a
+// 40000x40000 PNG, which "must fail cleanly, not OOM the worker": the job object
+// catches the decode side, and this catches the encode. Anything larger than a
+// gigabyte belongs in a temp file, which is what the requiresDisk flag on an
+// edge is for.
 constexpr std::uint64_t kMaxEncodedBytes = 1ull * 1024 * 1024 * 1024;
 
 }  // namespace
@@ -176,4 +178,4 @@ HRESULT MemoryStream::Stat(STATSTG* stat, DWORD /*flags*/) {
     return S_OK;
 }
 
-}  // namespace morph::wic
+}  // namespace morph::comio

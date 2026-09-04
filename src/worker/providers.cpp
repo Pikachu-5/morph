@@ -4,6 +4,7 @@
 #include "morph/providers/html.h"
 #include "morph/providers/markdown.h"
 #include "morph/providers/pdf.h"
+#include "morph/providers/mf.h"
 #include "morph/providers/wic.h"
 
 namespace morph::worker {
@@ -53,6 +54,10 @@ wic::WicProvider& WicProviderInstance() {
     static wic::WicProvider instance;
     return instance;
 }
+mf::MediaFoundationProvider& MediaFoundationInstance() {
+    static mf::MediaFoundationProvider instance;
+    return instance;
+}
 
 }  // namespace
 
@@ -74,6 +79,7 @@ Providers::Providers() {
     // between two hops -- unlike a document, which the IR carries across.
     executor_.Add(PdfWriterInstance());
     executor_.Add(WicProviderInstance());
+    executor_.Add(MediaFoundationInstance());
 
     executor_.BuildGraph(graph_);
 }
@@ -97,6 +103,7 @@ void Providers::ProbeCapabilities() {
     // rather than a graph with edges to strike out. What is recorded here is
     // what a UI needs to offer the Store deep link.
     for (std::string& id : wic::InstalledCodecs().Ids()) capabilities_.Add(std::move(id));
+    for (std::string& id : mf::InstalledEncoders().Ids()) capabilities_.Add(std::move(id));
 
     graph_.RemoveProviderEdges(unavailable);
 }

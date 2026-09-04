@@ -60,9 +60,13 @@ enum class Fidelity : std::uint8_t {
         case Fidelity::Lossless:
             return "Nothing is lost. The result is identical in content.";
         case Fidelity::High:
-            return "Visually equivalent, but re-encoded once. Repeated conversions will degrade.";
+            return "Equivalent to look at or listen to, but re-encoded once. Repeated "
+                   "conversions will degrade.";
+        // Media-neutral on purpose. The document wording -- "text, structure and
+        // images survive" -- was true until audio arrived, and then extracting a
+        // soundtrack from a video reported that the images had survived it.
         case Fidelity::Structural:
-            return "Text, structure and images survive. Exact visual layout does not.";
+            return "The content survives. Its exact presentation does not.";
         case Fidelity::TextOnly:
             return "Only the text survives. Formatting, images and layout are discarded.";
         case Fidelity::Rasterized:

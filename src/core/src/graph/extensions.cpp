@@ -11,7 +11,7 @@ namespace {
 // keeps a read-only format out of the target list: PDF input arrived in §8.7
 // long before anything could be said about writing every format we can read, and
 // a menu that offers a target we cannot produce is worse than one that is short.
-constexpr std::array<FormatExtension, 11> kTable{{
+constexpr std::array<FormatExtension, 20> kTable{{
     {"text/markdown", "md", "markdown", true},
     {"text/html", "html", "htm", true},
     {"application/docx", "docx", "", true},
@@ -31,6 +31,25 @@ constexpr std::array<FormatExtension, 11> kTable{{
     {"image/gif", "gif", "", false},
     {"image/heif", "heic", "heif", true},
     {"image/webp", "webp", "", true},
+
+    // Audio and video (section 7). Two profiles can share an extension -- an MP4
+    // holding H.264 and one holding HEVC are different nodes and the same file
+    // name -- so the order matters in one direction only: ProfileForExtension
+    // takes the first match, which is what a user typing "out.mp4" means.
+    {"video/mp4;codec=h264", "mp4", "m4v", true},
+    {"video/mp4;codec=hevc", "mp4", "", true},
+    // Read, never written: Media Foundation has no QuickTime or ASF sink, and
+    // the FFmpeg backend will not change that for MOV (section 7.3).
+    {"video/quicktime;codec=h264", "mov", "qt", false},
+    {"video/x-ms-asf;codec=wmv", "wmv", "asf", false},
+
+    {"audio/mp4;codec=aac", "m4a", "aac", true},
+    {"audio/mpeg;codec=mp3", "mp3", "", true},
+    {"audio/wav;codec=pcm", "wav", "wave", true},
+    // Decoded on Windows 10 and later; never encoded. The GitHub SKU's FFmpeg
+    // backend is where FLAC output will come from.
+    {"audio/flac", "flac", "", false},
+    {"audio/x-ms-wma;codec=wma", "wma", "", true},
 }};
 
 std::string Lowered(std::string_view text) {

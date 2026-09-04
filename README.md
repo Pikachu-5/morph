@@ -33,10 +33,11 @@ Pre-M0. What exists today:
 | Capability table memory map (§9.2) | Implemented |
 | Image provider — WIC, every installed codec (§6) | Implemented |
 | `morph.shellext.dll` — IExplorerCommand, zero-IPC menu (§9) | Implemented, not yet registered |
+| A/V provider — Media Foundation, remux fast path (§7.1) | Implemented |
 | `Morph.App.exe` | Not started |
-| A/V providers (Media Foundation, FFmpeg) | Not started |
+| FFmpeg backend — the GitHub SKU's codecs (§7.2) | Not started |
 
-355 tests green (`ctest --preset x64-debug`), including one that starts the
+366 tests green (`ctest --preset x64-debug`), including one that starts the
 broker, lets it start a worker, and converts a real file over the real pipe.
 
 Markdown, HTML and DOCX convert to each other in every direction, all three
@@ -51,6 +52,15 @@ proved it can encode, because a registered HEIF encoder that fails at commit is
 what a stock Windows 11 has (§6.2). Orientation is normalised from EXIF before
 anything touches the pixels and the tag is stripped on the way out, which is the
 detail §6.1 puts first for good reason.
+
+Audio and video go through Media Foundation, which is the OS's own codecs: MP4,
+MOV, ASF, MP3, AAC, WAV, FLAC and WMA in, and whatever this machine can actually
+encode out. What it can encode is established by negotiating with the encoder at
+startup rather than by asking whether one is registered, because the two answers
+differ. The remux fast path (§7.2) copies compressed samples when the codec
+already matches — extracting the AAC soundtrack from an MP4 rewrites no audio at
+all. Everything Media Foundation cannot do (Matroska, WebM, AV1, Opus, FLAC out)
+is the FFmpeg backend's job and is not built yet.
 
 The shell extension builds its submenu from the memory-mapped capability table
 with no IPC and no file IO, which is what §9.2 requires and what the 8 ms budget

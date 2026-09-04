@@ -26,9 +26,17 @@ constexpr int kAcceptTimeoutMs = 250;
 // backstop for a client that does not.
 constexpr std::size_t kMaxInputsPerJob = 10000;
 
-// Slack over the derived memory budget, for the runtime, the provider's own
-// fixed costs, and the fact that memPeakFactor is an estimate.
-constexpr std::uint64_t kMemorySlackBytes = 64ull * 1024 * 1024;
+// What a worker costs before it opens anything at all: the CRT, COM, Media
+// Foundation, WIC, and the WebView2 probe. Measured at about 93 MB of working
+// set on a stock Windows 11, and commit runs higher than that.
+//
+// This is a FLOOR on the job object's memory limit, not slack. Section 11.2
+// derives the budget from the input -- memPeakFactor x inputSize -- and that
+// derivation says 0 for a sixty-byte Markdown file, which is a limit the worker
+// cannot start under. It was killed by its own job object before it could
+// connect back, and the broker reported it as "the worker did not connect",
+// which is true and useless.
+constexpr std::uint64_t kWorkerBaselineBytes = 384ull * 1024 * 1024;
 
 std::uint64_t AvailablePhysicalBytes() {
     MEMORYSTATUSEX status{};
@@ -468,7 +476,7 @@ void Broker::HandleSubmit(const std::shared_ptr<ClientLink>& client,
         const std::uint64_t needed =
             static_cast<std::uint64_t>(planned.plan->memPeakFactor *
                                        static_cast<double>(inputBytes)) +
-            kMemorySlackBytes;
+            kWorkerBaselineBytes;
         if (memoryCeiling > 0 && needed > memoryCeiling) {
             task.status = Status::kResourceLimit;
             task.error = input.filename().string() + " would need about " +

@@ -88,9 +88,15 @@ TEST_CASE("A target Morph does not write fails the task, not the job", "[broker]
     const std::filesystem::path input = sandbox.Write("notes.md");
 
     std::vector<std::filesystem::path> taken;
-    const OutputPlan plan = ResolveOutput(input, "video/mp4;codec=h264", DefaultPolicy(), 0,
-                                          taken);
-    CHECK_FALSE(plan.error.empty());
+
+    // QuickTime is read and never written -- Media Foundation has no .mov sink
+    // -- which is exactly the case the `writable` flag in the extension table
+    // exists for. A format that is merely unknown must fail the same way.
+    CHECK_FALSE(
+        ResolveOutput(input, "video/quicktime;codec=h264", DefaultPolicy(), 0, taken)
+            .error.empty());
+    CHECK_FALSE(
+        ResolveOutput(input, "application/x-nonesuch", DefaultPolicy(), 0, taken).error.empty());
 }
 
 TEST_CASE("The rename rule counts up, and never destroys anything", "[broker][output]") {
