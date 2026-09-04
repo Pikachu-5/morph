@@ -6,6 +6,7 @@
 add_executable(morph_worker
     main.cpp
     providers.cpp
+    serve.cpp
 )
 
 target_link_libraries(morph_worker PRIVATE

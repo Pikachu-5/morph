@@ -109,6 +109,25 @@ private:
 
     void* handle_ = nullptr;  // HANDLE, kept opaque so this header stays portable
     FrameReader reader_;
+
+    // One event per direction, for the overlapped I/O the transport is built on.
+    //
+    // The alternative -- a plain synchronous handle -- cannot carry a duplex
+    // conversation at all. Windows serialises I/O on a handle opened without
+    // FILE_FLAG_OVERLAPPED, so a thread blocked in ReadFile holds the handle
+    // while a WriteFile from another thread waits behind it. Both sides of this
+    // protocol read on one thread and write on another (the worker reports
+    // progress while listening for Cancel; the broker's session thread reads
+    // while job threads report), so that deadlock is not a corner case, it is
+    // the steady state.
+    //
+    // Two events rather than one because a read and a write really do overlap,
+    // and an OVERLAPPED sharing an event with another operation in flight is
+    // undefined behaviour rather than a race that shows up under load.
+    void* readEvent_ = nullptr;
+    void* writeEvent_ = nullptr;
+
+    [[nodiscard]] void* EventFor(bool read);
 };
 
 // Creates the pipe and accepts clients. Only the broker uses this.

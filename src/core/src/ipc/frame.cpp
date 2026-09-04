@@ -30,7 +30,7 @@ std::uint32_t ReadU32(const std::byte* at) {
 
 bool KnownType(std::uint16_t raw) {
     return raw >= static_cast<std::uint16_t>(MessageType::kHello) &&
-           raw <= static_cast<std::uint16_t>(MessageType::kError);
+           raw <= static_cast<std::uint16_t>(MessageType::kRunTask);
 }
 
 }  // namespace
@@ -49,6 +49,13 @@ std::string_view Name(MessageType type) noexcept {
         case MessageType::kJobDone:      return "JobDone";
         case MessageType::kCancel:       return "Cancel";
         case MessageType::kError:        return "Error";
+
+        case MessageType::kWorkerHello:      return "WorkerHello";
+        case MessageType::kDescribeGraph:    return "DescribeGraph";
+        case MessageType::kGraphDescription: return "GraphDescription";
+        case MessageType::kProbeFiles:       return "ProbeFiles";
+        case MessageType::kProbeResult:      return "ProbeResult";
+        case MessageType::kRunTask:          return "RunTask";
     }
     return "unknown";
 }

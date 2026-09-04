@@ -9,6 +9,7 @@ add_library(morph_core STATIC
     src/graph/media_profile.cpp
     src/graph/graph.cpp
     src/graph/planner.cpp
+    src/graph/extensions.cpp
     src/io/stream.cpp
     src/io/options.cpp
     src/io/provider.cpp
@@ -20,6 +21,7 @@ add_library(morph_core STATIC
     src/doc/pipeline.cpp
     src/ipc/frame.cpp
     src/ipc/codec.cpp
+    src/ipc/worker_codec.cpp
     src/ipc/pipe.cpp
 )
 add_library(morph::core ALIAS morph_core)

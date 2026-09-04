@@ -46,6 +46,17 @@ enum class MessageType : std::uint16_t {
     kJobDone = 9,        // broker -> client
     kCancel = 10,        // client -> broker
     kError = 11,         // broker -> client
+
+    // The broker-to-worker channel (worker_protocol.h). The tags live in this
+    // enum because the frame header carries one MessageType and there is only
+    // one framing layer; the messages themselves are declared next door, where
+    // the comment explains why they are not part of the client contract.
+    kWorkerHello = 12,      // worker -> broker
+    kDescribeGraph = 13,    // broker -> worker
+    kGraphDescription = 14, // worker -> broker
+    kProbeFiles = 15,       // broker -> worker
+    kProbeResult = 16,      // worker -> broker
+    kRunTask = 17,          // broker -> worker
 };
 
 [[nodiscard]] std::string_view Name(MessageType type) noexcept;

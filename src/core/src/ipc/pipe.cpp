@@ -69,8 +69,14 @@ bool BuildSecurityAttributes(SECURITY_ATTRIBUTES& attributes, PSECURITY_DESCRIPT
 std::wstring PackageFamilyTag() {
     // Inside an MSIX the package family name is the right discriminator. Outside
     // one -- a developer build, or the tests -- GetCurrentPackageFamilyName
-    // fails, and the executable's directory is a good enough stand-in: it keeps
+    // fails, and the executable's DIRECTORY is a good enough stand-in: it keeps
     // two side-by-side checkouts from sharing a broker.
+    //
+    // The directory, not the file. Every process in section 3.1 computes this
+    // name and they must all arrive at the same one; hashing the module path
+    // would give the broker, the worker, the app and the shell extension four
+    // different names for the pipe they are supposed to meet on. They ship in
+    // one directory, which is the property being hashed.
     UINT32 length = 0;
     const LONG rc = ::GetCurrentPackageFamilyName(&length, nullptr);
     if (rc == ERROR_INSUFFICIENT_BUFFER && length > 0) {
@@ -84,10 +90,14 @@ std::wstring PackageFamilyTag() {
     wchar_t path[MAX_PATH]{};
     ::GetModuleFileNameW(nullptr, path, MAX_PATH);
 
-    // FNV-1a over the path, rendered as hex. A hash rather than the path itself
-    // because a pipe name has a length limit and paths do not.
+    std::wstring_view directory(path);
+    const std::size_t separator = directory.find_last_of(L"\\/");
+    if (separator != std::wstring_view::npos) directory = directory.substr(0, separator);
+
+    // FNV-1a over the directory, rendered as hex. A hash rather than the path
+    // itself because a pipe name has a length limit and paths do not.
     std::uint64_t hash = 1469598103934665603ull;
-    for (const wchar_t c : std::wstring_view(path)) {
+    for (const wchar_t c : directory) {
         hash ^= static_cast<std::uint64_t>(c);
         hash *= 1099511628211ull;
     }
@@ -122,8 +132,13 @@ std::wstring PipeNameFor(std::wstring_view suffix) {
 Connection::~Connection() { Close(); }
 
 Connection::Connection(Connection&& other) noexcept
-    : handle_(other.handle_), reader_(std::move(other.reader_)) {
+    : handle_(other.handle_),
+      reader_(std::move(other.reader_)),
+      readEvent_(other.readEvent_),
+      writeEvent_(other.writeEvent_) {
     other.handle_ = nullptr;
+    other.readEvent_ = nullptr;
+    other.writeEvent_ = nullptr;
 }
 
 Connection& Connection::operator=(Connection&& other) noexcept {
@@ -131,7 +146,11 @@ Connection& Connection::operator=(Connection&& other) noexcept {
         Close();
         handle_ = other.handle_;
         reader_ = std::move(other.reader_);
+        readEvent_ = other.readEvent_;
+        writeEvent_ = other.writeEvent_;
         other.handle_ = nullptr;
+        other.readEvent_ = nullptr;
+        other.writeEvent_ = nullptr;
     }
     return *this;
 }
@@ -141,15 +160,29 @@ bool Connection::Open() const noexcept {
 }
 
 void Connection::Close() noexcept {
-    if (!Open()) {
-        handle_ = nullptr;
-        return;
+    if (Open()) {
+        // Let the peer drain what has already been written before the handle
+        // goes away, so a final JobDone is not lost to a race with process exit.
+        ::FlushFileBuffers(static_cast<HANDLE>(handle_));
+        ::CloseHandle(static_cast<HANDLE>(handle_));
     }
-    // Let the peer drain what has already been written before the handle goes
-    // away, so a final JobDone is not lost to a race with process exit.
-    ::FlushFileBuffers(static_cast<HANDLE>(handle_));
-    ::CloseHandle(static_cast<HANDLE>(handle_));
     handle_ = nullptr;
+
+    if (readEvent_ != nullptr) ::CloseHandle(static_cast<HANDLE>(readEvent_));
+    if (writeEvent_ != nullptr) ::CloseHandle(static_cast<HANDLE>(writeEvent_));
+    readEvent_ = nullptr;
+    writeEvent_ = nullptr;
+}
+
+void* Connection::EventFor(bool read) {
+    void*& slot = read ? readEvent_ : writeEvent_;
+    if (slot == nullptr) {
+        // Manual reset, initially unsignalled: the documented requirement for an
+        // OVERLAPPED event, because the wait is ours to reset rather than the
+        // system's to consume.
+        slot = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    }
+    return slot;
 }
 
 Result Connection::SendFrame(MessageType type, std::span<const std::byte> payload) {
@@ -163,15 +196,33 @@ Result Connection::SendFrame(MessageType type, std::span<const std::byte> payloa
 
     const std::vector<std::byte> frame = EncodeFrame(type, payload);
 
+    HANDLE event = static_cast<HANDLE>(EventFor(/*read=*/false));
+    if (event == nullptr) {
+        return LastErrorAs(Status::kInternal, "Could not create the pipe's write event");
+    }
+
     // One WriteFile per frame. In message mode the pipe preserves the boundary,
     // so splitting a frame across writes would split it across messages too.
     std::size_t written = 0;
     while (written < frame.size()) {
-        DWORD wrote = 0;
         const DWORD want = static_cast<DWORD>(
             std::min<std::size_t>(frame.size() - written, 1024u * 1024u));
-        if (!::WriteFile(static_cast<HANDLE>(handle_), frame.data() + written, want, &wrote,
-                         nullptr) ||
+
+        OVERLAPPED overlapped{};
+        overlapped.hEvent = event;
+        ::ResetEvent(event);
+
+        DWORD wrote = 0;
+        if (!::WriteFile(static_cast<HANDLE>(handle_), frame.data() + written, want, nullptr,
+                         &overlapped)) {
+            if (::GetLastError() != ERROR_IO_PENDING) {
+                return LastErrorAs(Status::kIoError, "Could not write to the broker pipe");
+            }
+        }
+        // The wait is what makes this synchronous to the caller. What overlapped
+        // I/O buys is not asynchrony but the absence of the per-handle I/O lock
+        // that would make this write queue behind a read on another thread.
+        if (!::GetOverlappedResult(static_cast<HANDLE>(handle_), &overlapped, &wrote, TRUE) ||
             wrote == 0) {
             return LastErrorAs(Status::kIoError, "Could not write to the broker pipe");
         }
@@ -192,14 +243,34 @@ std::optional<FrameReader::Frame> Connection::Receive(Result& failed) {
     // frames' worth when the peer wrote them back to back.
     if (std::optional<FrameReader::Frame> frame = reader_.Next()) return frame;
 
+    HANDLE event = static_cast<HANDLE>(EventFor(/*read=*/true));
+    if (event == nullptr) {
+        failed = LastErrorAs(Status::kInternal, "Could not create the pipe's read event");
+        return std::nullopt;
+    }
+
     std::vector<std::byte> chunk(kInBufferBytes);
     while (true) {
+        OVERLAPPED overlapped{};
+        overlapped.hEvent = event;
+        ::ResetEvent(event);
+
         DWORD got = 0;
-        const BOOL ok = ::ReadFile(static_cast<HANDLE>(handle_), chunk.data(),
-                                   static_cast<DWORD>(chunk.size()), &got, nullptr);
+        BOOL ok = ::ReadFile(static_cast<HANDLE>(handle_), chunk.data(),
+                             static_cast<DWORD>(chunk.size()), nullptr, &overlapped);
+        // ERROR_MORE_DATA can arrive from either call. GetOverlappedResult fills
+        // in the byte count in both the success and the more-data case, so it is
+        // asked in every case where the operation actually started.
+        if (ok || ::GetLastError() == ERROR_IO_PENDING ||
+            ::GetLastError() == ERROR_MORE_DATA) {
+            ok = ::GetOverlappedResult(static_cast<HANDLE>(handle_), &overlapped, &got, TRUE);
+        } else {
+            ok = FALSE;
+        }
         if (!ok) {
             const DWORD code = ::GetLastError();
-            if (code == ERROR_BROKEN_PIPE || code == ERROR_PIPE_NOT_CONNECTED) {
+            if (code == ERROR_BROKEN_PIPE || code == ERROR_PIPE_NOT_CONNECTED ||
+                code == ERROR_OPERATION_ABORTED) {
                 return std::nullopt;  // a clean close, not an error
             }
             if (code != ERROR_MORE_DATA) {
@@ -246,7 +317,12 @@ Result PipeServer::CreateInstance(bool first) {
         ~Freer() { if (descriptor != nullptr) ::LocalFree(descriptor); }
     } freer{descriptor};
 
-    DWORD openMode = PIPE_ACCESS_DUPLEX;
+    // FILE_FLAG_OVERLAPPED is not optional here, and not only for the accept
+    // timeout. Without it Windows serialises every operation on the handle, so a
+    // thread blocked reading holds off a write from another thread -- and both
+    // ends of this protocol read and write concurrently by design (see the note
+    // on Connection's events).
+    DWORD openMode = PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED;
     // Only the FIRST instance carries the squatting defence; later instances of
     // a name this process already owns must not.
     if (first) openMode |= FILE_FLAG_FIRST_PIPE_INSTANCE;
@@ -285,8 +361,8 @@ Result PipeServer::Accept(Connection& into, int timeoutMs) {
     }
 
     // ConnectNamedPipe on a blocking handle waits indefinitely, which the idle
-    // loop cannot use. Overlapped I/O with an event gives a timeout without
-    // making the rest of the transport asynchronous.
+    // loop cannot use. The instance is overlapped, so the wait is a real wait
+    // with a timeout rather than a sleep-and-retry loop.
     OVERLAPPED overlapped{};
     overlapped.hEvent = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (overlapped.hEvent == nullptr) {
@@ -297,26 +373,30 @@ Result PipeServer::Accept(Connection& into, int timeoutMs) {
         ~Closer() { ::CloseHandle(handle); }
     } closer{overlapped.hEvent};
 
-    // A blocking-mode handle cannot take an OVERLAPPED, so the wait is done with
-    // a poll loop instead: ConnectNamedPipe returns immediately when a client is
-    // already queued, which is the common case under load.
-    const DWORD deadline =
-        timeoutMs < 0 ? 0 : ::GetTickCount() + static_cast<DWORD>(timeoutMs);
-
-    while (true) {
-        if (::ConnectNamedPipe(static_cast<HANDLE>(pending_), nullptr)) break;
-
+    if (!::ConnectNamedPipe(static_cast<HANDLE>(pending_), &overlapped)) {
         const DWORD code = ::GetLastError();
-        if (code == ERROR_PIPE_CONNECTED) break;  // connected between create and connect
-        if (code != ERROR_NO_DATA && code != ERROR_PIPE_LISTENING) {
+        if (code == ERROR_IO_PENDING) {
+            const DWORD waited = ::WaitForSingleObject(
+                overlapped.hEvent, timeoutMs < 0 ? INFINITE : static_cast<DWORD>(timeoutMs));
+            if (waited != WAIT_OBJECT_0) {
+                // Nothing connected in time. The pending connect has to be
+                // cancelled before the handle is reused, or the next Accept
+                // inherits an operation it did not start.
+                ::CancelIo(static_cast<HANDLE>(pending_));
+                return Result::Cancelled();
+            }
+            DWORD ignored = 0;
+            if (!::GetOverlappedResult(static_cast<HANDLE>(pending_), &overlapped, &ignored,
+                                       FALSE)) {
+                return LastErrorAs(Status::kIoError, "Could not accept a broker connection");
+            }
+        } else if (code != ERROR_PIPE_CONNECTED) {
+            // ERROR_PIPE_CONNECTED: a client connected between the create and
+            // the connect, which is a success with an unusual spelling.
             return Result::Error(Status::kIoError,
                                  "Could not accept a broker connection (Windows error " +
                                      std::to_string(code) + ").");
         }
-        if (timeoutMs >= 0 && ::GetTickCount() >= deadline) {
-            return Result::Cancelled();
-        }
-        ::Sleep(10);
     }
 
     into.Close();
@@ -338,7 +418,7 @@ Result ConnectToBroker(Connection& into, const std::wstring& name, std::uint32_t
     while (true) {
         const HANDLE handle =
             ::CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
-                          0, nullptr);
+                          FILE_FLAG_OVERLAPPED, nullptr);
         if (handle != INVALID_HANDLE_VALUE) {
             DWORD mode = PIPE_READMODE_MESSAGE;
             if (!::SetNamedPipeHandleState(handle, &mode, nullptr, nullptr)) {

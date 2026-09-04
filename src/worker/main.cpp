@@ -19,10 +19,12 @@
 #include <windows.h>
 
 #include "morph/core/executor.h"
+#include "morph/core/extensions.h"
 #include "morph/core/planner.h"
 #include "morph/core/stream.h"
 #include "morph/core/temp_store.h"
 #include "providers.h"
+#include "serve.h"
 
 namespace {
 
@@ -120,20 +122,13 @@ struct Options {
     bool listOnly = false;
 };
 
-// Guesses the target profile from the output file's extension. The INPUT is
-// never identified this way -- section 5 is explicit that Probe must not trust
-// an extension -- but the output has no bytes to inspect and its name is the
-// only statement of intent the user has made.
+// The target profile from the output file's extension. The INPUT is never
+// identified this way -- section 5 is explicit that Probe must not trust an
+// extension -- but the output has no bytes to inspect and its name is the only
+// statement of intent the user has made. The table is shared with the broker,
+// which resolves output names before any byte is written (extensions.h).
 std::string TargetFromExtension(const std::filesystem::path& path) {
-    std::string extension = path.extension().string();
-    std::transform(extension.begin(), extension.end(), extension.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-
-    if (extension == ".md" || extension == ".markdown") return "text/markdown";
-    if (extension == ".html" || extension == ".htm") return "text/html";
-    if (extension == ".docx") return "application/docx";
-    if (extension == ".pdf") return "application/pdf";
-    return {};
+    return std::string(ProfileForExtension(path.extension().string()));
 }
 
 bool ParseOption(std::string_view text, OptionBag& into) {
@@ -369,11 +364,17 @@ int wmain(int argc, wchar_t** argv) {
 
     Options options;
     std::vector<std::string> positional;
+    // Set by --serve, which the broker passes and a person never does. It is not
+    // in the usage text for that reason: it is a private calling convention
+    // between two of our own processes, not a command.
+    std::wstring servePipe;
 
     for (int i = 1; i < argc; ++i) {
         const std::string argument = Narrow(argv[i]);
 
-        if (argument == "-q" || argument == "--quiet") {
+        if (argument == "--serve" && i + 1 < argc) {
+            servePipe = argv[++i];
+        } else if (argument == "-q" || argument == "--quiet") {
             options.quiet = true;
         } else if (argument == "--plan") {
             options.listOnly = true;
@@ -392,6 +393,17 @@ int wmain(int argc, wchar_t** argv) {
             return 1;
         } else {
             positional.push_back(argument);
+        }
+    }
+
+    if (!servePipe.empty()) {
+        try {
+            worker::Providers providers;
+            providers.ProbeCapabilities();
+            return worker::Serve(providers, servePipe);
+        } catch (const std::exception& error) {
+            PrintError(std::string("Internal error: ") + error.what());
+            return 5;
         }
     }
 

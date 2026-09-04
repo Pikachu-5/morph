@@ -18,6 +18,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # in section 3 is not worth the static-link savings.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
+# Every executable lands in one directory. The broker starts the worker by
+# looking beside itself (section 10.3 starts it on demand, with no install
+# database to consult), and a layout that mirrors the source tree would put them
+# in sibling directories where neither can find the other.
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
 option(MORPH_BUILD_TESTS "Build the test suite" ON)
 option(MORPH_ASAN        "Build with AddressSanitizer" OFF)
 option(MORPH_WARNINGS_AS_ERRORS "Treat warnings as errors" ON)
@@ -31,6 +37,11 @@ add_library(morph::settings ALIAS morph_settings)
 target_compile_features(morph_settings INTERFACE cxx_std_20)
 
 target_compile_definitions(morph_settings INTERFACE
+    # The one place the product version is written down. It reaches the wire in
+    # Hello and WorkerHello, where a version mismatch is diagnosed by a human
+    # reading a log rather than by the protocol (section 10.2 versions the
+    # PROTOCOL separately, and that constant lives in protocol.h).
+    MORPH_VERSION="${PROJECT_VERSION}"
     UNICODE _UNICODE
     NOMINMAX
     WIN32_LEAN_AND_MEAN
@@ -74,6 +85,7 @@ endif()
 add_subdirectory(src/core)
 add_subdirectory(src/providers)
 add_subdirectory(src/worker)
+add_subdirectory(src/broker)
 
 if(MORPH_BUILD_TESTS)
     enable_testing()

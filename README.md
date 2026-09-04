@@ -29,10 +29,13 @@ Pre-M0. What exists today:
 | IPC framing, codec and pipe transport (§10.1, §10.2) | Implemented |
 | `morph.core` — plan executor with hop fusion and weighted progress | Implemented |
 | `morph.worker.exe` + the unadvertised CLI (§2, §3.1) | Implemented |
-| `morph.broker.exe`, `morph.shellext.dll`, `Morph.App.exe` | Not started |
+| `morph.broker.exe` — singleton, job queue, scheduler, worker lifetime (§3.1, §10.3, §11) | Implemented |
+| Capability table memory map (§9.2) | Not started |
+| `morph.shellext.dll`, `Morph.App.exe` | Not started |
 | Image and A/V providers (WIC, Media Foundation, FFmpeg) | Not started |
 
-307 tests green (`ctest --preset x64-debug`).
+325 tests green (`ctest --preset x64-debug`), including one that starts the
+broker, lets it start a worker, and converts a real file over the real pipe.
 
 Markdown, HTML and DOCX convert to each other in every direction, all three
 render to PDF, and PDF text extracts back into any of them — with no direct
@@ -51,14 +54,30 @@ The worker carries an unadvertised command line over the same engine the app and
 the Explorer menu use (§2). After building:
 
 ```powershell
-.\outuildd-debug\src\worker\morph.worker.exe convert report.docx report.pdf
-.\outuildd-debug\src\worker\morph.worker.exe targets notes.md
-.\outuildd-debug\src\worker\morph.worker.exe formats
+cd .\out\build\x64-debug\bin
+.\morph.worker.exe convert report.docx report.pdf
+.\morph.worker.exe targets notes.md
+.\morph.worker.exe formats
 ```
 
 `targets` lists everything a file can become, with the fidelity rating and hop
 count the planner worked out — the same numbers the UI will show before you
 commit.
+
+Every executable lands in one `bin` directory, because the broker finds its
+worker by looking beside itself and because all four processes derive the pipe
+name from the directory they share.
+
+The broker has no user interface and is not started by hand in normal use — a
+client that fails to connect starts it (§10.3). To watch one work:
+
+```powershell
+.\morph.broker.exe --verbose --idle-seconds 30
+```
+
+It exits after sixty seconds with no clients and no queued work. `--idle-seconds`
+shortens that, and is what the end-to-end test passes so that a test run does not
+leave a broker sitting in the session for a minute.
 
 ## Decisions taken beyond the document
 

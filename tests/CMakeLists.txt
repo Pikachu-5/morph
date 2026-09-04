@@ -19,12 +19,17 @@ add_executable(morph_tests
     unit/test_pdf_reader.cpp
     unit/test_ipc.cpp
     unit/test_executor.cpp
+    unit/test_worker_protocol.cpp
+    unit/test_broker_output.cpp
+    unit/test_broker_scheduling.cpp
+    integration/test_broker_end_to_end.cpp
 )
 
 target_include_directories(morph_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(morph_tests PRIVATE
     morph::core
+    morph::broker
     morph::provider::docmd
     morph::provider::dochtml
     morph::provider::docooxml
@@ -38,6 +43,11 @@ set_target_properties(morph_tests PROPERTIES FOLDER "tests")
 # Registers each TEST_CASE with CTest individually, so a failure names the case
 # rather than the binary.
 catch_discover_tests(morph_tests)
+
+# The end-to-end test starts morph.broker.exe, which starts morph.worker.exe.
+# Both have to exist next to the test binary before it runs -- they all share one
+# output directory for exactly this reason.
+add_dependencies(morph_tests morph_broker morph_worker)
 
 # pdfium.dll is loaded at run time and must sit beside the test executable.
 get_property(MORPH_PDFIUM_DLL GLOBAL PROPERTY MORPH_PDFIUM_DLL)
