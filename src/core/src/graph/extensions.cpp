@@ -11,11 +11,26 @@ namespace {
 // keeps a read-only format out of the target list: PDF input arrived in §8.7
 // long before anything could be said about writing every format we can read, and
 // a menu that offers a target we cannot produce is worse than one that is short.
-constexpr std::array<FormatExtension, 4> kTable{{
+constexpr std::array<FormatExtension, 11> kTable{{
     {"text/markdown", "md", "markdown", true},
     {"text/html", "html", "htm", true},
     {"application/docx", "docx", "", true},
     {"application/pdf", "pdf", "", true},
+
+    // Images (section 6). Whether a HEIF, WebP or AVIF edge exists at all
+    // depends on the codecs installed, and the WIC provider decides that when it
+    // enumerates its edges -- this table only says what such a file would be
+    // called if one can be written.
+    {"image/png", "png", "", true},
+    {"image/jpeg", "jpg", "jpeg", true},
+    {"image/bmp", "bmp", "", true},
+    {"image/tiff", "tiff", "tif", true},
+    // Read, never written: a GIF written from a full-colour source is quantised
+    // to 256 colours, and the provider will not offer that until it carries a
+    // fidelity rating that says so.
+    {"image/gif", "gif", "", false},
+    {"image/heif", "heic", "heif", true},
+    {"image/webp", "webp", "", true},
 }};
 
 std::string Lowered(std::string_view text) {

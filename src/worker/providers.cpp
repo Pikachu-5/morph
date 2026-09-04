@@ -4,6 +4,7 @@
 #include "morph/providers/html.h"
 #include "morph/providers/markdown.h"
 #include "morph/providers/pdf.h"
+#include "morph/providers/wic.h"
 
 namespace morph::worker {
 namespace {
@@ -48,6 +49,10 @@ pdf::PdfWriter& PdfWriterInstance() {
     static pdf::PdfWriter instance;
     return instance;
 }
+wic::WicProvider& WicProviderInstance() {
+    static wic::WicProvider instance;
+    return instance;
+}
 
 }  // namespace
 
@@ -64,8 +69,11 @@ Providers::Providers() {
     executor_.Add(HtmlWriterInstance());
     executor_.Add(MarkdownWriterInstance());
 
-    // Byte providers.
+    // Byte providers. WIC is one provider carrying every image pair, because a
+    // decoded bitmap is an intermediate that lives inside one call rather than
+    // between two hops -- unlike a document, which the IR carries across.
     executor_.Add(PdfWriterInstance());
+    executor_.Add(WicProviderInstance());
 
     executor_.BuildGraph(graph_);
 }
@@ -82,6 +90,13 @@ void Providers::ProbeCapabilities() {
     } else {
         unavailable.emplace_back("pdf");
     }
+
+    // The image codecs are not removed here, because they were never added: the
+    // WIC provider enumerates edges only for the codecs this machine has
+    // (section 6.2), so a missing HEIF package produces a graph without HEIF
+    // rather than a graph with edges to strike out. What is recorded here is
+    // what a UI needs to offer the Store deep link.
+    for (std::string& id : wic::InstalledCodecs().Ids()) capabilities_.Add(std::move(id));
 
     graph_.RemoveProviderEdges(unavailable);
 }

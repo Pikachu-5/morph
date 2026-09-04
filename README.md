@@ -31,10 +31,11 @@ Pre-M0. What exists today:
 | `morph.worker.exe` + the unadvertised CLI (§2, §3.1) | Implemented |
 | `morph.broker.exe` — singleton, job queue, scheduler, worker lifetime (§3.1, §10.3, §11) | Implemented |
 | Capability table memory map (§9.2) | Implemented |
+| Image provider — WIC, every installed codec (§6) | Implemented |
 | `morph.shellext.dll`, `Morph.App.exe` | Not started |
-| Image and A/V providers (WIC, Media Foundation, FFmpeg) | Not started |
+| A/V providers (Media Foundation, FFmpeg) | Not started |
 
-334 tests green (`ctest --preset x64-debug`), including one that starts the
+347 tests green (`ctest --preset x64-debug`), including one that starts the
 broker, lets it start a worker, and converts a real file over the real pipe.
 
 Markdown, HTML and DOCX convert to each other in every direction, all three
@@ -42,6 +43,13 @@ render to PDF, and PDF text extracts back into any of them — with no direct
 converter between any pair — the graph composes each route through
 the IR, which is the whole argument of §8.2. Adding one format wires it to all
 the others.
+
+Images convert between PNG, JPEG, BMP and TIFF, reading GIF, WebP, HEIF and AVIF
+wherever the machine has the codec — and only offering a target it has actually
+proved it can encode, because a registered HEIF encoder that fails at commit is
+what a stock Windows 11 has (§6.2). Orientation is normalised from EXIF before
+anything touches the pixels and the tag is stripped on the way out, which is the
+detail §6.1 puts first for good reason.
 
 DOCX scope is held to §8.4's P1 (paragraphs, runs, headings, character
 formatting, hyperlinks, images) and P2 (lists, tables). P3 (footnotes,

@@ -15,6 +15,7 @@ add_executable(morph_tests
     unit/test_opc.cpp
     unit/test_docx_reader.cpp
     unit/test_docx_writer.cpp
+    unit/test_wic.cpp
     unit/test_pdf.cpp
     unit/test_pdf_reader.cpp
     unit/test_ipc.cpp
@@ -35,6 +36,7 @@ target_link_libraries(morph_tests PRIVATE
     morph::provider::dochtml
     morph::provider::docooxml
     morph::provider::pdf
+    morph::provider::wic
     morph::settings
     Catch2::Catch2WithMain
     miniz::miniz)
