@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "job.h"
+#include "morph/core/caps.h"
 #include "morph/core/graph.h"
 #include "morph/core/provider.h"
 #include "pool.h"
@@ -70,11 +71,19 @@ private:
 
     [[nodiscard]] Result AcquireGraph();
 
+    // Section 9.2's memory-mapped table, republished "at startup and whenever the
+    // codec probe result changes". Only the first of those happens today: nothing
+    // re-probes yet, and the generation is here so that the day something does,
+    // readers find out.
+    [[nodiscard]] Result PublishCapabilities();
+
     FormatGraph graph_;
     Capabilities capabilities_;
-    // Bumped when the graph is republished. Clients hold it to know whether
-    // their copy of the capability table is current (section 9.2).
-    std::uint64_t capabilityGeneration_ = 1;
+    CapabilityMapping capabilityMap_;
+    // Bumped on every republish. Clients hold it to know whether their copy of
+    // the capability table is current (section 9.2). Starts at zero because zero
+    // means "nothing published" in the table's own header.
+    std::uint64_t capabilityGeneration_ = 0;
 
     ipc::PipeServer server_;
     void* singleton_ = nullptr;  // HANDLE to the named mutex

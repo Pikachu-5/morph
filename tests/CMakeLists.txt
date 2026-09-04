@@ -21,6 +21,7 @@ add_executable(morph_tests
     unit/test_executor.cpp
     unit/test_worker_protocol.cpp
     unit/test_broker_output.cpp
+    unit/test_capability_table.cpp
     unit/test_broker_scheduling.cpp
     integration/test_broker_end_to_end.cpp
 )

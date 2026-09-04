@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <system_error>
 #include <thread>
 
 #include <windows.h>
 
+#include "capabilities.h"
 #include "morph/core/ipc/worker_protocol.h"
 #include "morph/core/planner.h"
 #include "output.h"
@@ -121,7 +123,23 @@ Result Broker::Start() {
     limits.interactive = true;
     if (const Result started = utility_.Start(L"utility", limits); !started) return started;
 
-    return AcquireGraph();
+    if (const Result graph = AcquireGraph(); !graph) return graph;
+
+    // A broker that cannot publish its table still works -- clients ask
+    // QueryTargets and get the same answers over the pipe. Only the Explorer
+    // menu degrades, and section 9.2 already says what it degrades to. So this
+    // is reported and not fatal.
+    if (const Result published = PublishCapabilities(); !published) {
+        std::fprintf(stderr, "morph.broker: %s\n", published.message().c_str());
+    }
+    return Result::Ok();
+}
+
+Result Broker::PublishCapabilities() {
+    if (!capabilityMap_.Mapped()) {
+        if (const Result created = capabilityMap_.Create(); !created) return created;
+    }
+    return capabilityMap_.Publish(CapabilitiesOf(graph_), ++capabilityGeneration_);
 }
 
 Result Broker::AcquireGraph() {
@@ -218,6 +236,13 @@ void Broker::Run() {
 std::string Broker::Describe() const {
     std::string text = std::to_string(graph_.NodeCount()) + " formats, " +
                        std::to_string(graph_.EdgeCount()) + " conversions";
+
+    const CapabilityTable table = capabilityMap_.Table();
+    text += table.Valid() ? ", menu table generation " + std::to_string(table.Generation()) +
+                                " with " + std::to_string(table.Extensions().size()) +
+                                " extensions"
+                          : ", no menu table";
+
     if (capabilities_.All().empty()) return text + ", no optional capabilities";
 
     text += ", capabilities:";

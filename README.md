@@ -30,11 +30,11 @@ Pre-M0. What exists today:
 | `morph.core` — plan executor with hop fusion and weighted progress | Implemented |
 | `morph.worker.exe` + the unadvertised CLI (§2, §3.1) | Implemented |
 | `morph.broker.exe` — singleton, job queue, scheduler, worker lifetime (§3.1, §10.3, §11) | Implemented |
-| Capability table memory map (§9.2) | Not started |
+| Capability table memory map (§9.2) | Implemented |
 | `morph.shellext.dll`, `Morph.App.exe` | Not started |
 | Image and A/V providers (WIC, Media Foundation, FFmpeg) | Not started |
 
-325 tests green (`ctest --preset x64-debug`), including one that starts the
+334 tests green (`ctest --preset x64-debug`), including one that starts the
 broker, lets it start a worker, and converts a real file over the real pipe.
 
 Markdown, HTML and DOCX convert to each other in every direction, all three

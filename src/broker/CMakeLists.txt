@@ -10,6 +10,7 @@
 # testing has to be on this side of the line.
 add_library(morph_broker_core STATIC
     broker.cpp
+    capabilities.cpp
     job.cpp
     output.cpp
     pool.cpp

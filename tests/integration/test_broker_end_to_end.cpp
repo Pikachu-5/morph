@@ -12,6 +12,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -21,6 +22,7 @@
 
 #include <windows.h>
 
+#include "morph/core/caps.h"
 #include "morph/core/ipc/pipe.h"
 #include "morph/core/ipc/protocol.h"
 
@@ -208,6 +210,40 @@ TEST_CASE("The broker converts a file end to end", "[broker][integration]") {
                                        });
         REQUIRE(docx != targets.targets.end());
         CHECK(docx->hopCount >= 1u);
+    }
+
+    SECTION("it publishes a menu table that agrees with what it answers") {
+        // Section 9.2's whole claim is that the shell extension can build the
+        // submenu without asking. That is only true if the table it reads says
+        // the same thing the broker would have said over the pipe.
+        CapabilityMapping map;
+        REQUIRE(map.OpenForRead());
+
+        const CapabilityTable table = map.Table();
+        REQUIRE(table.Valid());
+        CHECK(table.Generation() > 0u);
+
+        const std::span<const CapsTarget> published = table.TargetsFor(".DOCX");
+        REQUIRE_FALSE(published.empty());
+
+        ipc::QueryTargets query;
+        query.sourceProfiles = {"application/docx"};
+        REQUIRE(connection.Send(query));
+
+        ipc::Targets answered;
+        REQUIRE(connection.ReceiveAs(answered));
+
+        for (const CapsTarget& target : published) {
+            const std::string profile(table.String(target.profileOff));
+            const auto match = std::find_if(answered.targets.begin(), answered.targets.end(),
+                                            [&profile](const ipc::TargetOption& option) {
+                                                return option.profile == profile;
+                                            });
+            INFO(profile);
+            REQUIRE(match != answered.targets.end());
+            CHECK(match->fidelity == target.fidelity);
+            CHECK(match->hopCount == target.hopCount);
+        }
     }
 
     SECTION("it converts a markdown file to docx") {

@@ -7,20 +7,15 @@
 namespace morph {
 namespace {
 
-struct Entry {
-    std::string_view profile;
-    std::string_view extension;  // the canonical one, used when naming an output
-    std::string_view alternate;  // also accepted on input; empty when there is none
-};
-
-// One row per format we WRITE. A format we only read has no business here: the
-// question this table answers is "what do I call the output", and a reader has
-// no answer to it.
-constexpr std::array<Entry, 4> kTable{{
-    {"text/markdown", "md", "markdown"},
-    {"text/html", "html", "htm"},
-    {"application/docx", "docx", ""},
-    {"application/pdf", "pdf", ""},
+// One row per format Morph reads, writes, or both. The `writable` flag is what
+// keeps a read-only format out of the target list: PDF input arrived in §8.7
+// long before anything could be said about writing every format we can read, and
+// a menu that offers a target we cannot produce is worse than one that is short.
+constexpr std::array<FormatExtension, 4> kTable{{
+    {"text/markdown", "md", "markdown", true},
+    {"text/html", "html", "htm", true},
+    {"application/docx", "docx", "", true},
+    {"application/pdf", "pdf", "", true},
 }};
 
 std::string Lowered(std::string_view text) {
@@ -32,9 +27,13 @@ std::string Lowered(std::string_view text) {
 
 }  // namespace
 
+std::span<const FormatExtension> KnownExtensions() noexcept {
+    return std::span<const FormatExtension>(kTable.data(), kTable.size());
+}
+
 std::string_view ExtensionFor(std::string_view profileId) noexcept {
-    for (const Entry& entry : kTable) {
-        if (entry.profile == profileId) return entry.extension;
+    for (const FormatExtension& entry : kTable) {
+        if (entry.profile == profileId && entry.writable) return entry.extension;
     }
     return {};
 }
@@ -43,7 +42,7 @@ std::string_view ProfileForExtension(std::string_view extension) noexcept {
     if (!extension.empty() && extension.front() == '.') extension.remove_prefix(1);
     const std::string lowered = Lowered(extension);
 
-    for (const Entry& entry : kTable) {
+    for (const FormatExtension& entry : kTable) {
         if (entry.extension == lowered) return entry.profile;
         if (!entry.alternate.empty() && entry.alternate == lowered) return entry.profile;
     }

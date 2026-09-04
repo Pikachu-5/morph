@@ -66,7 +66,7 @@ bool BuildSecurityAttributes(SECURITY_ATTRIBUTES& attributes, PSECURITY_DESCRIPT
     return true;
 }
 
-std::wstring PackageFamilyTag() {
+std::wstring PackageFamilyTagImpl() {
     // Inside an MSIX the package family name is the right discriminator. Outside
     // one -- a developer build, or the tests -- GetCurrentPackageFamilyName
     // fails, and the executable's DIRECTORY is a good enough stand-in: it keeps
@@ -114,10 +114,12 @@ Result LastErrorAs(Status status, std::string_view what) {
 
 }  // namespace
 
+std::wstring InstallTag() { return PackageFamilyTagImpl(); }
+
 std::wstring PipeName() {
     DWORD session = 0;
     ::ProcessIdToSessionId(::GetCurrentProcessId(), &session);
-    return L"\\\\.\\pipe\\morph.broker." + std::to_wstring(session) + L"." + PackageFamilyTag();
+    return L"\\\\.\\pipe\\morph.broker." + std::to_wstring(session) + L"." + InstallTag();
 }
 
 std::wstring PipeNameFor(std::wstring_view suffix) {

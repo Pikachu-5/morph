@@ -22,6 +22,7 @@ add_library(morph_core STATIC
     src/ipc/frame.cpp
     src/ipc/codec.cpp
     src/ipc/worker_codec.cpp
+    src/ipc/caps.cpp
     src/ipc/pipe.cpp
 )
 add_library(morph::core ALIAS morph_core)

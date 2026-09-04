@@ -48,6 +48,16 @@ namespace morph::ipc {
 // Overload for tests, which need a name nothing else will claim.
 [[nodiscard]] std::wstring PipeNameFor(std::wstring_view suffix);
 
+// What distinguishes this INSTALL from another one on the same machine: the
+// package family name inside an MSIX, and a hash of the directory the binaries
+// share outside one.
+//
+// Exposed because every named kernel object Morph creates has to carry it, and
+// they have to agree. The capability table (caps.h) and the broker pipe are two
+// names for the same install, and a table published under one tag while clients
+// look under another is a bug with no symptom except an empty menu.
+[[nodiscard]] std::wstring InstallTag();
+
 // One end of a connection. Both the server and the client hand one of these back
 // so that message exchange is written once.
 class Connection {
