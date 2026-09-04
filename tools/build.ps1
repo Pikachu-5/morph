@@ -15,7 +15,11 @@
     A configure preset from CMakePresets.json. Default: x64-debug.
 
 .PARAMETER Target
-    configure | build | test | licenses | all. Default: all.
+    configure | build | test | licenses | bench | all. Default: all.
+
+    `bench` runs the section 17 performance gate and is deliberately not part of
+    `all`: it starts and kills brokers, empties the probe cache, and takes about
+    a minute, none of which belongs in the loop someone runs after every edit.
 
 .EXAMPLE
     .\tools\build.ps1
@@ -26,7 +30,7 @@ param(
     [ValidateSet('x64-debug', 'x64-release', 'x64-asan')]
     [string]$Preset = 'x64-debug',
 
-    [ValidateSet('configure', 'build', 'test', 'licenses', 'all')]
+    [ValidateSet('configure', 'build', 'test', 'licenses', 'bench', 'all')]
     [string]$Target = 'all',
 
     [switch]$Fresh
@@ -93,7 +97,11 @@ if ($Target -in @('configure', 'all')) {
     if ($Fresh) { $configureArgs += '--fresh' }
     Invoke-Step "Configure ($Preset)" { cmake @configureArgs }
 }
-if ($Target -in @('build', 'all')) {
+# Building before testing or benchmarking is not a convenience. Without it,
+# `-Target test` happily runs a binary from a previous edit and reports a pass
+# for code that is not the code in the tree -- which is exactly what it did to me
+# once, and a green run you cannot trust is worse than a red one.
+if ($Target -in @('build', 'test', 'bench', 'all')) {
     Invoke-Step "Build ($Preset)" { cmake --build --preset $Preset }
 }
 if ($Target -in @('licenses', 'all')) {
@@ -126,6 +134,17 @@ if ($Target -in @('test', 'all')) {
         }
     }
     Invoke-Step "Test ($Preset)" { ctest --preset $Preset }
+}
+if ($Target -eq 'bench') {
+    # Section 16's gate: "fail the build on >10% regression against the budgets
+    # in section 17". A debug build measures the iterator checks rather than the
+    # pipeline, so this refuses to pretend otherwise.
+    if ($Preset -ne 'x64-release') {
+        throw "The performance gate is only meaningful on x64-release; got $Preset."
+    }
+    Invoke-Step "Budgets ($Preset)" {
+        & (Join-Path $repo 'out/build/x64-release/bin/morph.bench.exe') --gate
+    }
 }
 
 Write-Host "`nDone." -ForegroundColor Green

@@ -1,0 +1,146 @@
+# Morph — continuous integration (architecture section 18).
+#
+# "CI on GitHub Actions windows-latest, matrix over x64 and ARM64, with the
+#  license scanner and the benchmark gate as required checks."
+#
+# Both of those checks exist and run here. ARM64 does not, and the reason is
+# written down rather than forgotten: section 20.2 was settled as x64 only for
+# now, CMakePresets.json carries the arm64-release preset so enabling it is a
+# matrix entry rather than a refactor, and a job that cannot run its own tests --
+# a windows-latest runner is x64 and would cross-compile without executing
+# anything -- is a job that reports green for a build nobody has run.
+#
+# Everything here goes through tools/build.ps1, on purpose. A workflow that
+# reimplements the build is a workflow that drifts from it, and the first sign is
+# always a failure that reproduces on CI and nowhere else.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # 03:00 UTC daily, for the sanitised run below.
+    - cron: '0 3 * * *'
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  build:
+    name: ${{ matrix.preset }}
+    runs-on: windows-latest
+    strategy:
+      # One preset failing must not hide the state of the other. They fail for
+      # different reasons often enough to be worth the runner minutes.
+      fail-fast: false
+      matrix:
+        preset: [x64-debug, x64-release]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # vcpkg builds every dependency from source on a cold cache, which is
+      # roughly twenty minutes of the wall clock here. The key is the manifest:
+      # change a dependency and the cache misses, which is exactly right.
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.vcpkg-cache
+          key: vcpkg-${{ matrix.preset }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-${{ matrix.preset }}-
+
+      # Keyed by the fetch script, which is where the pin and the checksum live
+      # (see the comment at the top of it). Changing the pin changes the key.
+      - name: Cache PDFium
+        uses: actions/cache@v4
+        with:
+          path: third_party/pdfium
+          key: pdfium-${{ hashFiles('tools/fetch-pdfium.ps1') }}
+
+      - name: Environment
+        run: |
+          "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+          $cache = Join-Path $env:GITHUB_WORKSPACE '.vcpkg-cache'
+          New-Item -ItemType Directory -Force $cache | Out-Null
+          "VCPKG_BINARY_SOURCES=clear;files,$cache,readwrite" >> $env:GITHUB_ENV
+
+      - name: Fetch PDFium
+        run: ./tools/fetch-pdfium.ps1
+
+      # Configure, build, scan licences, test. Section 14's scanner is inside
+      # this step rather than beside it, because it reads what vcpkg installed
+      # for this preset and there is nothing to read before the build.
+      - name: Build and test
+        run: ./tools/build.ps1 -Preset ${{ matrix.preset }} -Target all
+
+      # Section 17's budgets, gated at section 16's ten percent. Release only:
+      # a debug build measures the iterator checks rather than the pipeline.
+      #
+      # Expect the cold-start figure in this log to be the slow one. A fresh
+      # runner has never probed anything, so it pays the full capability probe
+      # once -- which is the number a user sees after an install, and worth
+      # having on the record every build.
+      - name: Performance budgets
+        if: matrix.preset == 'x64-release'
+        run: ./tools/build.ps1 -Preset x64-release -Target bench
+
+      # Section 14's table obliges a notice for every component. Keeping it as
+      # an artefact means the packaging step has something to pick up and a
+      # human has something to read without running the scanner themselves.
+      - name: Upload third-party notices
+        if: matrix.preset == 'x64-release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ThirdPartyNotices
+          path: out/build/x64-release/ThirdPartyNotices.txt
+          if-no-files-found: error
+
+  asan:
+    name: x64-asan
+    runs-on: windows-latest
+    # Section 16 puts fuzzing on a continuous schedule rather than in PR CI, and
+    # the same argument applies to a sanitised run: it is three times the wall
+    # clock and it catches a different class of thing. What it does catch, it
+    # catches nowhere else -- four separate defects the first time it was
+    # switched on -- so it runs on main and on the nightly schedule rather than
+    # on every pull request.
+    if: github.event_name != 'pull_request'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.vcpkg-cache
+          key: vcpkg-x64-asan-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-x64-asan-
+
+      - name: Cache PDFium
+        uses: actions/cache@v4
+        with:
+          path: third_party/pdfium
+          key: pdfium-${{ hashFiles('tools/fetch-pdfium.ps1') }}
+
+      - name: Environment
+        run: |
+          "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+          $cache = Join-Path $env:GITHUB_WORKSPACE '.vcpkg-cache'
+          New-Item -ItemType Directory -Force $cache | Out-Null
+          "VCPKG_BINARY_SOURCES=clear;files,$cache,readwrite" >> $env:GITHUB_ENV
+
+      - name: Fetch PDFium
+        run: ./tools/fetch-pdfium.ps1
+
+      # The deterministic hostile-input corpus runs inside this suite, which is
+      # the configuration section 15 makes it worth running in.
+      - name: Build and test under AddressSanitizer
+        run: ./tools/build.ps1 -Preset x64-asan -Target all

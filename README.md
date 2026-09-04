@@ -133,7 +133,7 @@ machine:
 | --- | --- | --- |
 | Context menu, 100 files selected | 0.004 ms | ≤ 8 ms |
 | Broker cold start to accepting jobs | 78 ms warm, 908 ms cold | ≤ 150 ms |
-| 4000×3000 JPEG → PNG | 629 ms | ≤ 120 ms |
+| 4000×3000 JPEG → PNG | 720 ms | ≤ 120 ms |
 | 40-page DOCX → PDF, warm | 489 ms | ≤ 1500 ms |
 | Broker idle private bytes | 1.3 MB | ≤ 12 MB |
 
@@ -152,8 +152,9 @@ uncorrelated per-pixel noise: it fills every DCT coefficient, so it decoded
 slower than a photograph, and it defeats deflate, so the PNG encode looked cheap.
 Against something actually shaped like a photograph — smooth colour, one hard
 edge, fine grain, a 3.8 MB JPEG in and a 16.6 MB PNG out — the honest figure is
-629 ms. Roughly 110 ms of it is WIC's JPEG decoder and the rest is one deflate
-stream over 36 MB of pixels. The encoder's only dial is the PNG filter, and
+around 720 ms, and 685–751 ms across four runs on an otherwise idle machine.
+Roughly 120 ms of it is WIC's JPEG decoder and the rest is one deflate stream
+over 36 MB of pixels. The encoder's only dial is the PNG filter, and
 sweeping all six moves the total by under six percent (turning filtering *off*
 is the slowest of the lot, because it leaves deflate twice as much to chew).
 
@@ -203,6 +204,15 @@ usual place; otherwise set it yourself.
 .\tools\build.ps1 -Preset x64-release -Target test
 .\tools\build.ps1 -Preset x64-asan -Fresh
 ```
+
+Every one of those runs on GitHub Actions as well
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): x64 debug and release
+on each push and pull request, with §14's licence scanner and §17's performance
+gate as steps rather than as separate scripts, and the AddressSanitizer build
+nightly and on `main`. The workflow drives `tools/build.ps1` rather than
+reimplementing it, so CI and a local run cannot drift apart. ARM64 is not in the
+matrix: §20.2 settled this as x64-only for now, and a runner that can build
+ARM64 but not execute it would report green for a build nobody has run.
 
 From an existing Developer PowerShell the presets work directly:
 

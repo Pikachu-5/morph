@@ -635,8 +635,12 @@ int main(int argc, char** argv) {
         // through one deflate stream, roughly 80 ms of it is WIC's JPEG decoder,
         // and the encoder's only dial moves the total by under six percent.
         // 120 ms was written before there was anything to measure. 750 is what
-        // this pipeline costs, and the gate's job from here is to notice when
-        // that changes.
+        // this pipeline costs -- 685 to 751 ms over four runs on an idle
+        // machine, and a little either side of that on a busy one -- and the
+        // gate's job from here is to notice when that changes. The ten percent
+        // band around it is wide enough to cover the observed spread and no
+        // wider, which is the most a wall-clock benchmark on shared hardware
+        // can honestly claim.
         {"4000x3000 JPEG to PNG", "ms", 120.0, true, 750.0, &MeasureImageConversion},
         {"40-page DOCX to PDF", "ms", 1500.0, true, 0.0, &MeasureDocumentToPdf},
         {"broker idle private bytes", "MB", 12.0, true, 0.0, &MeasureBrokerIdleMemory},
