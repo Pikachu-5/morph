@@ -503,6 +503,42 @@ TEST_CASE("The quality option reaches the encoder", "[wic]") {
     CHECK(coarse.bytes.size() < fine.bytes.size());
 }
 
+TEST_CASE("The PNG filter option reaches the encoder", "[wic]") {
+    // A horizontal ramp that changes down the frame too, so no two scanlines are
+    // identical and deflate cannot compress the whole picture by matching rows.
+    // That is what makes the filter choice visible: "sub" predicts each pixel
+    // from its left neighbour, which is exactly this picture, and "none"
+    // predicts nothing.
+    std::vector<Pixel> pixels;
+    for (int y = 0; y < 128; ++y) {
+        for (int x = 0; x < 128; ++x) {
+            pixels.push_back(Pixel{static_cast<unsigned char>((x * 2 + y) & 0xFF),
+                                   static_cast<unsigned char>((x * 3 + y * 5) & 0xFF),
+                                   static_cast<unsigned char>((255 - x + y * 2) & 0xFF)});
+        }
+    }
+    const std::vector<std::byte> bmp = MakeBmp(128, 128, pixels);
+
+    OptionBag none;
+    none.Set("png.filter", std::string("none"));
+    OptionBag sub;
+    sub.Set("png.filter", std::string("sub"));
+
+    const Conversion unfiltered = Convert(bmp, "image/bmp", "image/png", none);
+    const Conversion filtered = Convert(bmp, "image/bmp", "image/png", sub);
+    REQUIRE(unfiltered.result);
+    REQUIRE(filtered.result);
+    CHECK(filtered.bytes.size() < unfiltered.bytes.size());
+
+    // A name the encoder has never heard of is a typo in a preference, not a
+    // reason to fail somebody's conversion: it falls back and still writes a PNG.
+    OptionBag nonsense;
+    nonsense.Set("png.filter", std::string("bicubic"));
+    const Conversion fallback = Convert(bmp, "image/bmp", "image/png", nonsense);
+    CHECK(fallback.result);
+    CHECK(!fallback.bytes.empty());
+}
+
 TEST_CASE("A format Morph cannot write on this machine says so", "[wic]") {
     const std::vector<std::byte> bmp = MakeBmp(2, 2, Checkerboard());
 

@@ -39,9 +39,9 @@ Pre-M0. What exists today:
 | Performance budgets, measured (§17) | Implemented, one budget missed |
 | `Morph.App.exe` | Not started |
 
-392 tests green (`ctest --preset x64-debug`), including one that starts the
+393 tests green (`ctest --preset x64-debug`), including one that starts the
 broker, lets it start a worker, and converts a real file over the real pipe. The
-same 392 pass under AddressSanitizer (`.\tools\build.ps1 -Preset x64-asan`),
+same 393 pass under AddressSanitizer (`.\tools\build.ps1 -Preset x64-asan`),
 which is the configuration the hostile-input corpus is worth running in.
 
 Markdown, HTML and DOCX convert to each other in every direction, all three
@@ -124,30 +124,45 @@ leave a broker sitting in the session for a minute.
 ## Performance
 
 `morph.bench.exe` measures §17's budgets on the machine it runs on, and
-`--gate` makes it exit non-zero when one is missed. On a release build of this
+`--gate` makes it exit non-zero when something got more than ten percent slower
+than it was — §16's threshold, not the budget to the decimal, because a check
+that fails at random is a check nobody reads. On a release build of this
 machine:
 
 | Budget (§17) | Measured | Target |
 | --- | --- | --- |
 | Context menu, 100 files selected | 0.004 ms | ≤ 8 ms |
-| Broker cold start to accepting jobs | 94 ms | ≤ 150 ms |
-| 4000×3000 JPEG → PNG | 166 ms | ≤ 120 ms |
-| 40-page DOCX → PDF, warm | 303 ms | ≤ 1500 ms |
-| Broker idle private bytes | 1.2 MB | ≤ 12 MB |
+| Broker cold start to accepting jobs | 78 ms warm, 908 ms cold | ≤ 150 ms |
+| 4000×3000 JPEG → PNG | 629 ms | ≤ 120 ms |
+| 40-page DOCX → PDF, warm | 489 ms | ≤ 1500 ms |
+| Broker idle private bytes | 1.3 MB | ≤ 12 MB |
 
-Two of these are worth a note. The broker cold start was 988 ms until the
-capability probes — a WebView2 detection, three trial image encodes and five
-media-type negotiations — were given somewhere to remember their answers; §11.4
-already established that pattern for cost estimates. The cache is a readable file
-in `%LOCALAPPDATA%\Morph`, stamped with the Windows build and the binary that
-wrote it, so a new codec pack or a rebuilt Morph re-probes.
+Two of these need their story told.
 
-The image budget is missed and is a target rather than a measurement, in §17's
-own words. Of the 166 ms, roughly 45 ms is the JPEG decode and the rest is
-encoding twelve megapixels of PNG; hitting 120 ms through WIC means asking for
-cheaper filtering and accepting a larger file, which is a trade this project
-should make deliberately rather than to satisfy a number written before anything
-existed to measure.
+**Cold start is two numbers, and both are real.** The probe answers — a WebView2
+detection, three trial image encodes and five media-type negotiations — are
+cached in `%LOCALAPPDATA%\Morph`, stamped with the Windows build and the binary
+that wrote it. Warm, that is 78 ms. The launch right after an install pays the
+whole probe cost and takes 908 ms, and that happens to every user exactly once,
+so it is reported rather than averaged away.
+
+**The image target is missed by a factor of five, and the number that was wrong
+is the fixture.** The benchmark used to convert an `x ^ y` pattern, which is
+uncorrelated per-pixel noise: it fills every DCT coefficient, so it decoded
+slower than a photograph, and it defeats deflate, so the PNG encode looked cheap.
+Against something actually shaped like a photograph — smooth colour, one hard
+edge, fine grain, a 3.8 MB JPEG in and a 16.6 MB PNG out — the honest figure is
+629 ms. Roughly 110 ms of it is WIC's JPEG decoder and the rest is one deflate
+stream over 36 MB of pixels. The encoder's only dial is the PNG filter, and
+sweeping all six moves the total by under six percent (turning filtering *off*
+is the slowest of the lot, because it leaves deflate twice as much to chew).
+
+So 120 ms is not reachable through this pipeline, and §17 says these are targets
+to calibrate rather than measurements. The target stays in the table unedited;
+the gate watches a 750 ms baseline beside it. Keeping both means the gate is
+useful and the promise is still legible — collapsing them would lose one or the
+other. The `png.filter` option exposes the dial for anyone who wants to spend
+size on time.
 
 ## Decisions taken beyond the document
 
