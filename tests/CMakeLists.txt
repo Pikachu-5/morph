@@ -17,6 +17,7 @@ add_executable(morph_tests
     unit/test_docx_writer.cpp
     unit/test_wic.cpp
     unit/test_mf.cpp
+    unit/test_ffmpeg.cpp
     unit/test_pdf.cpp
     unit/test_pdf_reader.cpp
     unit/test_ipc.cpp
@@ -41,6 +42,7 @@ target_link_libraries(morph_tests PRIVATE
     morph::provider::pdf
     morph::provider::wic
     morph::provider::mf
+    morph::provider::ffmpeg
     morph::settings
     Catch2::Catch2WithMain
     miniz::miniz)
@@ -50,6 +52,29 @@ set_target_properties(morph_tests PROPERTIES FOLDER "tests")
 # Registers each TEST_CASE with CTest individually, so a failure names the case
 # rather than the binary.
 catch_discover_tests(morph_tests)
+
+# The stand-in for ffmpeg.exe and ffprobe.exe (tests/tools/fake_ffmpeg.cpp).
+#
+# It lives in its own directory rather than beside the binaries, for two reasons:
+# a build tree that contains something called ffmpeg.exe would have the REAL
+# provider find it, and a packaging step that copied bin/ wholesale would ship a
+# test double as a codec.
+add_executable(morph_fake_ffmpeg tools/fake_ffmpeg.cpp)
+target_link_libraries(morph_fake_ffmpeg PRIVATE morph::settings)
+set_target_properties(morph_fake_ffmpeg PROPERTIES
+    FOLDER "tests"
+    OUTPUT_NAME "ffmpeg"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/fake-ffmpeg")
+
+# The provider looks for two binaries by name and tells them apart by the
+# arguments it gives them, so the same executable answers to both.
+add_custom_command(TARGET morph_fake_ffmpeg POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:morph_fake_ffmpeg>"
+            "${CMAKE_BINARY_DIR}/bin/fake-ffmpeg/ffprobe.exe"
+    COMMENT "Copying the FFmpeg stand-in to ffprobe.exe")
+
+add_dependencies(morph_tests morph_fake_ffmpeg)
 
 # The end-to-end test starts morph.broker.exe, which starts morph.worker.exe.
 # Both have to exist next to the test binary before it runs -- they all share one

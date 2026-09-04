@@ -17,7 +17,8 @@ target_link_libraries(morph_worker PRIVATE
     morph::provider::docooxml
     morph::provider::pdf
     morph::provider::wic
-    morph::provider::mf)
+    morph::provider::mf
+    morph::provider::ffmpeg)
 
 set_target_properties(morph_worker PROPERTIES
     FOLDER "processes"

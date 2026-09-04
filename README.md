@@ -34,10 +34,10 @@ Pre-M0. What exists today:
 | Image provider — WIC, every installed codec (§6) | Implemented |
 | `morph.shellext.dll` — IExplorerCommand, zero-IPC menu (§9) | Implemented, not yet registered |
 | A/V provider — Media Foundation, remux fast path (§7.1) | Implemented |
+| FFmpeg backend — subprocess, remux fast path (§7.2) | Implemented, no binary shipped |
 | `Morph.App.exe` | Not started |
-| FFmpeg backend — the GitHub SKU's codecs (§7.2) | Not started |
 
-366 tests green (`ctest --preset x64-debug`), including one that starts the
+379 tests green (`ctest --preset x64-debug`), including one that starts the
 broker, lets it start a worker, and converts a real file over the real pipe.
 
 Markdown, HTML and DOCX convert to each other in every direction, all three
@@ -60,7 +60,16 @@ startup rather than by asking whether one is registered, because the two answers
 differ. The remux fast path (§7.2) copies compressed samples when the codec
 already matches — extracting the AAC soundtrack from an MP4 rewrites no audio at
 all. Everything Media Foundation cannot do (Matroska, WebM, AV1, Opus, FLAC out)
-is the FFmpeg backend's job and is not built yet.
+is the FFmpeg backend's job. That backend runs FFmpeg as a subprocess and never
+links it — §7.2's first reason is that the LGPL relinking obligation evaporates
+when you execute rather than link, and §14's licensing matrix depends on it
+staying true. It declares no edges at all unless `ffmpeg.exe` is beside the
+binaries or `MORPH_FFMPEG_DIR` points at one, which is exactly the difference
+between the two SKUs in §7.3: the same build, shipped two ways. No binary is
+fetched yet; the pinned, checksummed fetch belongs with the packaging milestone
+that assembles the GitHub SKU. The tests drive a stand-in binary through the real
+CreateProcess, pipes and job object, so everything between the graph and the
+process is covered without shipping a codec.
 
 The shell extension builds its submenu from the memory-mapped capability table
 with no IPC and no file IO, which is what §9.2 requires and what the 8 ms budget

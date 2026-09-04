@@ -4,6 +4,7 @@
 #include "morph/providers/html.h"
 #include "morph/providers/markdown.h"
 #include "morph/providers/pdf.h"
+#include "morph/providers/ffmpeg.h"
 #include "morph/providers/mf.h"
 #include "morph/providers/wic.h"
 
@@ -58,6 +59,10 @@ mf::MediaFoundationProvider& MediaFoundationInstance() {
     static mf::MediaFoundationProvider instance;
     return instance;
 }
+ffmpeg::FfmpegProvider& FfmpegInstance() {
+    static ffmpeg::FfmpegProvider instance;
+    return instance;
+}
 
 }  // namespace
 
@@ -80,6 +85,7 @@ Providers::Providers() {
     executor_.Add(PdfWriterInstance());
     executor_.Add(WicProviderInstance());
     executor_.Add(MediaFoundationInstance());
+    executor_.Add(FfmpegInstance());
 
     executor_.BuildGraph(graph_);
 }
@@ -104,6 +110,11 @@ void Providers::ProbeCapabilities() {
     // what a UI needs to offer the Store deep link.
     for (std::string& id : wic::InstalledCodecs().Ids()) capabilities_.Add(std::move(id));
     for (std::string& id : mf::InstalledEncoders().Ids()) capabilities_.Add(std::move(id));
+
+    // Whether FFmpeg is here is what separates the two SKUs (section 7.3), so it
+    // is worth naming in the capability bag rather than inferring from which
+    // formats appeared.
+    if (ffmpeg::InstalledTools().Present()) capabilities_.Add("ffmpeg");
 
     graph_.RemoveProviderEdges(unavailable);
 }
