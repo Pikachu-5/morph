@@ -58,6 +58,25 @@ namespace morph::ipc {
 // look under another is a bug with no symptom except an empty menu.
 [[nodiscard]] std::wstring InstallTag();
 
+// The directory this code was loaded from -- the executable's for the broker and
+// the worker, the DLL's for the shell extension, which is loaded into a
+// surrogate that lives somewhere else entirely. Every process in section 3.1
+// finds its siblings this way.
+[[nodiscard]] std::wstring InstallDirectory();
+
+// Starts the broker and waits until it accepts a connection.
+//
+// Section 10.3: "Started on demand by whichever client fails to connect." That
+// is a decision, not a fallback -- ConnectToBroker deliberately does not do it,
+// because only the caller knows whether it is allowed to create a process. A
+// client calls this exactly once, after a connect has failed, and connects
+// again.
+//
+// Returns kResourceLimit when the broker exits because one was already running,
+// which is a race between two clients and not a failure: the caller should
+// simply connect.
+[[nodiscard]] Result StartBroker(std::uint32_t waitMs = 5000);
+
 // One end of a connection. Both the server and the client hand one of these back
 // so that message exchange is written once.
 class Connection {

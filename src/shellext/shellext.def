@@ -1,0 +1,8 @@
+; Only the two entry points COM activation needs. No DllRegisterServer: the
+; class is declared in the package manifest (architecture section 9.1), and a
+; shell extension that writes its own registry keys is one an uninstall cannot
+; fully undo.
+LIBRARY morph.shellext
+EXPORTS
+    DllGetClassObject   PRIVATE
+    DllCanUnloadNow     PRIVATE

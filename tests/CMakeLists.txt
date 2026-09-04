@@ -23,6 +23,7 @@ add_executable(morph_tests
     unit/test_worker_protocol.cpp
     unit/test_broker_output.cpp
     unit/test_capability_table.cpp
+    unit/test_shell_menu.cpp
     unit/test_broker_scheduling.cpp
     integration/test_broker_end_to_end.cpp
 )
@@ -32,6 +33,7 @@ target_include_directories(morph_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(morph_tests PRIVATE
     morph::core
     morph::broker
+    morph::shellext::core
     morph::provider::docmd
     morph::provider::dochtml
     morph::provider::docooxml

@@ -87,8 +87,20 @@ std::wstring PackageFamilyTagImpl() {
         }
     }
 
+    // THIS module, not the process. The shell extension is loaded into a COM
+    // surrogate -- dllhost.exe, which lives in System32 -- so a tag derived from
+    // the process path would have the extension looking for the broker under a
+    // name no broker will ever create. Taking the module that contains this code
+    // gives morph.shellext.dll for the extension and morph.broker.exe for the
+    // broker, and those two sit in the same directory, which is the property
+    // being hashed.
+    HMODULE self = nullptr;
+    ::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                             GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         reinterpret_cast<LPCWSTR>(&PackageFamilyTagImpl), &self);
+
     wchar_t path[MAX_PATH]{};
-    ::GetModuleFileNameW(nullptr, path, MAX_PATH);
+    ::GetModuleFileNameW(self, path, MAX_PATH);
 
     std::wstring_view directory(path);
     const std::size_t separator = directory.find_last_of(L"\\/");
@@ -115,6 +127,70 @@ Result LastErrorAs(Status status, std::string_view what) {
 }  // namespace
 
 std::wstring InstallTag() { return PackageFamilyTagImpl(); }
+
+std::wstring InstallDirectory() {
+    HMODULE self = nullptr;
+    ::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                             GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         reinterpret_cast<LPCWSTR>(&InstallTag), &self);
+
+    wchar_t path[MAX_PATH]{};
+    if (::GetModuleFileNameW(self, path, MAX_PATH) == 0) return {};
+
+    std::wstring text(path);
+    const std::size_t separator = text.find_last_of(L"\\/");
+    return separator == std::wstring::npos ? std::wstring() : text.substr(0, separator);
+}
+
+Result StartBroker(std::uint32_t waitMs) {
+    const std::wstring directory = InstallDirectory();
+    if (directory.empty()) {
+        return Result::Error(Status::kInternal, "Could not work out where Morph is installed.");
+    }
+
+    std::wstring command = L"\"" + directory + L"\\morph.broker.exe\"";
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION info{};
+
+    // CREATE_NO_WINDOW because the broker has no console output in normal
+    // operation and a flash of one on every first right-click would be a bug
+    // report of its own. CREATE_BREAKAWAY_FROM_JOB is deliberately NOT set: if
+    // the client is inside a job object, the broker it starts belongs there too.
+    if (!::CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                          nullptr, nullptr, &startup, &info)) {
+        return LastErrorAs(Status::kMissingCapability, "Could not start the Morph broker");
+    }
+    ::CloseHandle(info.hThread);
+
+    // Wait for the pipe rather than for the process: the broker is useful when
+    // it accepts, not when it starts, and section 17 budgets 150 ms for the
+    // difference. A broker that exits immediately because another one holds the
+    // singleton is reported as such, and the caller connects to that one.
+    const DWORD deadline = ::GetTickCount() + waitMs;
+    while (::GetTickCount() < deadline) {
+        if (::WaitNamedPipeW(PipeName().c_str(), 50)) {
+            ::CloseHandle(info.hProcess);
+            return Result::Ok();
+        }
+        if (::WaitForSingleObject(info.hProcess, 0) == WAIT_OBJECT_0) {
+            DWORD code = 0;
+            ::GetExitCodeProcess(info.hProcess, &code);
+            ::CloseHandle(info.hProcess);
+            // 2 is "a broker is already running" (see the broker's main).
+            return code == 2 ? Result::Error(Status::kResourceLimit,
+                                             "A broker was already running.")
+                             : Result::Error(Status::kInternal,
+                                             "The Morph broker exited immediately (code " +
+                                                 std::to_string(code) + ").");
+        }
+        ::Sleep(10);
+    }
+
+    ::CloseHandle(info.hProcess);
+    return Result::Error(Status::kIoError, "The Morph broker did not start in time.");
+}
 
 std::wstring PipeName() {
     DWORD session = 0;

@@ -86,6 +86,7 @@ add_subdirectory(src/core)
 add_subdirectory(src/providers)
 add_subdirectory(src/worker)
 add_subdirectory(src/broker)
+add_subdirectory(src/shellext)
 
 if(MORPH_BUILD_TESTS)
     enable_testing()

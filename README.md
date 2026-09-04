@@ -32,10 +32,11 @@ Pre-M0. What exists today:
 | `morph.broker.exe` — singleton, job queue, scheduler, worker lifetime (§3.1, §10.3, §11) | Implemented |
 | Capability table memory map (§9.2) | Implemented |
 | Image provider — WIC, every installed codec (§6) | Implemented |
-| `morph.shellext.dll`, `Morph.App.exe` | Not started |
+| `morph.shellext.dll` — IExplorerCommand, zero-IPC menu (§9) | Implemented, not yet registered |
+| `Morph.App.exe` | Not started |
 | A/V providers (Media Foundation, FFmpeg) | Not started |
 
-347 tests green (`ctest --preset x64-debug`), including one that starts the
+355 tests green (`ctest --preset x64-debug`), including one that starts the
 broker, lets it start a worker, and converts a real file over the real pipe.
 
 Markdown, HTML and DOCX convert to each other in every direction, all three
@@ -50,6 +51,16 @@ proved it can encode, because a registered HEIF encoder that fails at commit is
 what a stock Windows 11 has (§6.2). Orientation is normalised from EXIF before
 anything touches the pixels and the tag is stripped on the way out, which is the
 detail §6.1 puts first for good reason.
+
+The shell extension builds its submenu from the memory-mapped capability table
+with no IPC and no file IO, which is what §9.2 requires and what the 8 ms budget
+in §17 leaves room for. Its logic — what a mixed selection may be offered, when
+to fall back to a single generic entry, how a fidelity rating reads in four
+words — is a separate library from the COM shell around it and is tested without
+Explorer. It has not been loaded by Explorer yet: that needs package identity,
+which arrives with the packaging milestone. The manifest that will register it is
+in [`packaging/msix`](packaging/msix/AppxManifest.xml), holding the one CLSID it
+shares with the code.
 
 DOCX scope is held to §8.4's P1 (paragraphs, runs, headings, character
 formatting, hyperlinks, images) and P2 (lists, tables). P3 (footnotes,
