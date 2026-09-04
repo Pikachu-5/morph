@@ -39,9 +39,9 @@ Pre-M0. What exists today:
 | Performance budgets, measured (§17) | Implemented, one budget missed |
 | `Morph.App.exe` | Not started |
 
-382 tests green (`ctest --preset x64-debug`), including one that starts the
+386 tests green (`ctest --preset x64-debug`), including one that starts the
 broker, lets it start a worker, and converts a real file over the real pipe. The
-same 382 pass under AddressSanitizer (`.\tools\build.ps1 -Preset x64-asan`),
+same 386 pass under AddressSanitizer (`.\tools\build.ps1 -Preset x64-asan`),
 which is the configuration the hostile-input corpus is worth running in.
 
 Markdown, HTML and DOCX convert to each other in every direction, all three
@@ -220,7 +220,19 @@ tools/             build script, PDFium fetcher, license scanner
 
 ## Licensing
 
-MIT, with a hard rule enforced in CI: no GPL, AGPL or LGPLv3 dependency enters
-the tree. Third-party components are limited to MIT, BSD-2, BSD-3, Apache-2.0,
-BSL-1.0, ISC and Zlib. FFmpeg is consumed as a subprocess in the GitHub SKU only,
-never linked. See section 14.
+MIT, with a hard rule that is enforced rather than asserted: no GPL, AGPL or
+LGPLv3 dependency enters the tree. Third-party components are limited to MIT,
+BSD-2, BSD-3, Apache-2.0, BSL-1.0, ISC and Zlib. FFmpeg is consumed as a
+subprocess in the GitHub SKU only, never linked. See section 14.
+
+The enforcement is `tools/scan-licenses.ps1`, which runs as a build step:
+
+```powershell
+.\tools\build.ps1 -Target licenses
+```
+
+It reads what vcpkg actually installed rather than what the manifest asked for —
+a transitive dependency is precisely the one that would arrive unnoticed — and
+fails on anything outside the allowlist, on anything explicitly copyleft, and on
+any package whose licence cannot be determined. It also writes the
+`ThirdPartyNotices.txt` that §14's table obliges for every component.

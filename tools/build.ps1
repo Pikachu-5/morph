@@ -15,7 +15,7 @@
     A configure preset from CMakePresets.json. Default: x64-debug.
 
 .PARAMETER Target
-    configure | build | test | all. Default: all.
+    configure | build | test | licenses | all. Default: all.
 
 .EXAMPLE
     .\tools\build.ps1
@@ -26,7 +26,7 @@ param(
     [ValidateSet('x64-debug', 'x64-release', 'x64-asan')]
     [string]$Preset = 'x64-debug',
 
-    [ValidateSet('configure', 'build', 'test', 'all')]
+    [ValidateSet('configure', 'build', 'test', 'licenses', 'all')]
     [string]$Target = 'all',
 
     [switch]$Fresh
@@ -95,6 +95,21 @@ if ($Target -in @('configure', 'all')) {
 }
 if ($Target -in @('build', 'all')) {
     Invoke-Step "Build ($Preset)" { cmake --build --preset $Preset }
+}
+if ($Target -in @('licenses', 'all')) {
+    # Section 14's rule, enforced rather than asserted: no GPL, AGPL or LGPLv3
+    # dependency enters the tree. It reads what vcpkg actually installed rather
+    # than what the manifest asked for, because a transitive dependency is
+    # exactly the one that would arrive unnoticed.
+    Invoke-Step "Licences ($Preset)" {
+        $presetDir = Join-Path (Join-Path $repo 'out') (Join-Path 'build' $Preset)
+        & (Join-Path $PSScriptRoot 'scan-licenses.ps1') `
+            -Path (Join-Path $presetDir 'vcpkg_installed') `
+            -Notices (Join-Path $presetDir 'ThirdPartyNotices.txt')
+        # The scanner throws on a violation, so reaching here means it passed.
+        # Invoke-Step checks an exit code, which a PowerShell script does not set.
+        $global:LASTEXITCODE = 0
+    }
 }
 if ($Target -in @('test', 'all')) {
     # The AddressSanitizer runtime is a DLL that ships with MSVC and is not on
