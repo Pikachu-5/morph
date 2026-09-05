@@ -75,13 +75,15 @@
     {
       "name": "x64-asan",
       "displayName": "x64 Debug + ASan",
+      "description": "MORPH_BUILD_APP is OFF here deliberately. AddressSanitizer is for the engine and section 15's hostile-input corpus, which is where an instrumented run catches things nothing else does; instrumenting a WinUI shell that parses no untrusted bytes buys nothing and costs a projection rebuild and a link. CI's asan job does not fetch the SDK for the same reason.",
       "inherits": [
         "base",
         "arch-x64"
       ],
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "MORPH_ASAN": "ON"
+        "MORPH_ASAN": "ON",
+        "MORPH_BUILD_APP": "OFF"
       }
     },
     {
