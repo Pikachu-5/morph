@@ -60,6 +60,20 @@ set(MORPH_WINAPPSDK_ROOTS
 # release as a whole and not of any one package in it.
 set(MORPH_WINAPPSDK_MAJORMINOR "0x00010008" CACHE STRING "Windows App Runtime major.minor, packed")
 
+# The same release again, in the two spellings the PACKAGE manifest needs. An
+# unpackaged app bootstraps the runtime with the packed number above; a packaged
+# one declares a framework dependency by name and minimum version, and the
+# deployment stack puts it in the package graph before the process starts. Get
+# these wrong and there is nothing to debug: the process is created and dies
+# before main, with no window and nothing written anywhere.
+#
+# MINVERSION is the runtime build that goes with the SDK packages pinned in the
+# manifest, not "whatever is installed". Raising the pin raises this.
+set(MORPH_WINAPPRUNTIME_NAME "Microsoft.WindowsAppRuntime.1.8"
+    CACHE STRING "The framework package a packaged Morph declares")
+set(MORPH_WINAPPRUNTIME_MINVERSION "8000.946.1701.0"
+    CACHE STRING "Minimum Windows App Runtime build, matching the pinned SDK")
+
 # Reads the manifest and sets, per package, MORPH_PKG_<ID> to the directory it
 # was found in and MORPH_VER_<ID> to its pinned version -- with the id
 # upper-cased and its dots turned into underscores. Not a function: the callers

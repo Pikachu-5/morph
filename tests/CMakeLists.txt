@@ -42,7 +42,26 @@ add_subdirectory(bench)
 
 target_include_directories(morph_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
+# The CLSID as the PACKAGE MANIFEST spells it, and the manifest itself, so that
+# test_shell_launch.cpp can check both against the constant the shell extension
+# was compiled with. Passing the string rather than reading it out of CMake at
+# run time is what makes the check a property of THIS build.
+target_compile_definitions(morph_tests PRIVATE
+    MORPH_SHELLEXT_CLSID_STRING="${MORPH_SHELLEXT_CLSID}"
+    MORPH_APPXMANIFEST_TEMPLATE="${PROJECT_SOURCE_DIR}/packaging/msix/AppxManifest.xml.in")
+
+# pugixml comes in through morph::provider::docooxml's public opc.h, but the
+# manifest test includes it directly and a transitive include is not a
+# dependency to rely on.
+find_package(pugixml CONFIG REQUIRED)
+if(TARGET pugixml::static)
+    set(MORPH_PUGIXML_TARGET pugixml::static)
+else()
+    set(MORPH_PUGIXML_TARGET pugixml::pugixml)
+endif()
+
 target_link_libraries(morph_tests PRIVATE
+    ${MORPH_PUGIXML_TARGET}
     morph::core
     morph::broker
     morph::shellext::core

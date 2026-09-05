@@ -24,6 +24,20 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 # in sibling directories where neither can find the other.
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
+# The context menu's class id, in the one spelling the package manifest needs.
+#
+# It is the single joint between src/shellext and packaging/msix: the manifest
+# declares the class, the DLL implements it, and if the two strings differ the
+# result is a verb that registers a class nobody implements -- which Explorer
+# reports as nothing at all, on a machine where everything looks installed.
+#
+# The C++ side is still the GUID literal in src/shellext/shellext.h, because a
+# generated header for one constant is worse than a test. The test is
+# test_shell_launch.cpp, which parses this string and compares it with what the
+# DLL was compiled with, so the two cannot drift without the suite going red.
+set(MORPH_SHELLEXT_CLSID "6F3E1D0A-9C4B-4E58-9A2F-0B5E7C1D8A34"
+    CACHE STRING "CLSID of the Explorer context menu handler")
+
 option(MORPH_BUILD_TESTS "Build the test suite" ON)
 option(MORPH_ASAN        "Build with AddressSanitizer" OFF)
 option(MORPH_WARNINGS_AS_ERRORS "Treat warnings as errors" ON)

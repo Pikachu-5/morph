@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  Morph, the package manifest (architecture sections 9.1, 12 and 13).
+
+  GENERATED. Do not edit the copy in the build tree; edit this template. Every
+  value that differs between the development registration and the shipping
+  package is substituted by src/app/CMakeLists.txt, and there is exactly one of
+  everything else.
+
+  THERE USED TO BE TWO MANIFESTS, one for development and one for shipping, with
+  a note in both saying they had to be kept in step by hand. They were not: the
+  shipping one had no PackageDependency on the Windows App Runtime, which a
+  packaged app does not bootstrap and must declare. That failure is not
+  diagnosable from the outside. The process is created and dies before main,
+  with no window and nothing written anywhere, and it would have been found by
+  installing the first real package. So the two are one file now, and the
+  differences are three strings.
+
+  THE CLSID BELOW must match kMorphContextMenuClsid in src/shellext/shellext.h.
+  It is not copied by hand any more either: CMake substitutes it from
+  MORPH_SHELLEXT_CLSID and a unit test parses that same string and compares it
+  with the constant the DLL was compiled with. A mismatch is a context menu that
+  registers a class nobody implements, which Explorer reports as nothing at all.
+
+  There is no DllRegisterServer and no HKCR writing anywhere in this project.
+  The class is declared here, activated through a surrogate, and disappears
+  completely when the package is removed.
+
+  REGISTERING THE DEVELOPMENT BUILD puts a "Convert with Morph" verb in the
+  right-click menu of every file on the machine. That is a real change to
+  somebody's desktop, which is why it is a command a person runs and never a
+  build step. Developer Mode must be on:
+
+      Add-AppxPackage -Register out\build\x64-debug\bin\AppxManifest.xml
+
+  and to remove it:
+
+      Get-AppxPackage @MORPH_PACKAGE_NAME@ | Remove-AppxPackage
+
+  Register one of the two at a time. Both declare the same CLSID, because it is
+  the same shell extension, and two packages offering one class is not a
+  configuration anybody has thought about.
+
+  Note for anyone editing the prose above: a double hyphen is not legal inside
+  an XML comment, and the deployment error it produces names a column rather
+  than the reason.
+-->
+
+<Package
+    xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+    xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+    xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+    xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+    xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
+    xmlns:desktop5="http://schemas.microsoft.com/appx/manifest/desktop/windows10/5"
+    IgnorableNamespaces="uap rescap com desktop4 desktop5">
+
+  <!-- The development registration takes a DIFFERENT NAME from the shipping
+       package on purpose. Section 10.1 derives the broker pipe name and the
+       capability table name from the install tag, so a development
+       registration sharing an identity with an installed build would have the
+       two talking to each other's broker.
+
+       Publisher is a placeholder until section 20.1's naming question is
+       settled and a Store reservation exists (backlog E1, A7). It has to match
+       the signing certificate's subject exactly, so it changes when that does. -->
+  <Identity
+      Name="@MORPH_PACKAGE_NAME@"
+      Publisher="@MORPH_PACKAGE_PUBLISHER@"
+      Version="@MORPH_PACKAGE_VERSION@"
+      ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>@MORPH_PACKAGE_DISPLAY_NAME@</DisplayName>
+    <PublisherDisplayName>Morph</PublisherDisplayName>
+    <Description>A native Windows file conversion engine.</Description>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <!-- Section 20.3: Windows 11 only. 10.0.22000.0 is the 21H2 floor the
+         compile settings already enforce with NTDDI_VERSION. -->
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.22000.0"
+                        MaxVersionTested="10.0.22631.0" />
+
+    <!-- A PACKAGED app does not bootstrap the Windows App Runtime; it declares
+         it, and the deployment stack puts it in the package graph before the
+         process starts. The version must match the SDK line the app was built
+         against, which is why both come from winappsdk.cmake. -->
+    <PackageDependency Name="@MORPH_WINAPPRUNTIME_NAME@"
+                       MinVersion="@MORPH_WINAPPRUNTIME_MINVERSION@"
+                       Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Capabilities>
+    <!-- No network capability anywhere in the package. Section 1: "Local only,
+         no network egress at all", and section 3.1 says the worker has none. A
+         converter that cannot reach the internet cannot leak a document. -->
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+
+  <Applications>
+    <Application Id="Morph" Executable="Morph.App.exe"
+                 EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+          DisplayName="@MORPH_PACKAGE_DISPLAY_NAME@"
+          Description="Convert files without uploading them anywhere."
+          BackgroundColor="transparent"
+          Square150x150Logo="Assets\Square150x150Logo.png"
+          Square44x44Logo="Assets\Square44x44Logo.png" />
+
+      <Extensions>
+        <!-- The surrogate. Section 9.1: the handler is activated out of process
+             rather than loaded into explorer.exe, which means a crash in the
+             menu takes down a host process nobody notices instead of the
+             user's desktop. Explorer still blocks on activation and on the
+             GetState / IEnumExplorerCommand calls, so the 8 ms budget in
+             section 17 stands regardless. -->
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:SurrogateServer DisplayName="Morph Context Menu">
+              <com:Class Id="@MORPH_SHELLEXT_CLSID@"
+                         Path="morph.shellext.dll"
+                         ThreadingModel="STA" />
+            </com:SurrogateServer>
+          </com:ComServer>
+        </com:Extension>
+
+        <!-- Type="*": the menu decides for itself whether it has anything to
+             offer, by reading the capability table (section 9.2). Registering
+             per extension instead would mean a package update every time a
+             codec package appeared on the machine. -->
+        <desktop4:Extension Category="windows.fileExplorerContextMenus">
+          <desktop4:FileExplorerContextMenus>
+            <desktop5:ItemType Type="*">
+              <desktop5:Verb Id="MorphConvert"
+                             Clsid="@MORPH_SHELLEXT_CLSID@" />
+            </desktop5:ItemType>
+          </desktop4:FileExplorerContextMenus>
+        </desktop4:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+</Package>

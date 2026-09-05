@@ -85,19 +85,59 @@ add_custom_command(TARGET morph_app POST_BUILD
             "${MORPH_PDFIUM_DLL}" "$<TARGET_FILE_DIR:morph_app>"
     COMMENT "Copying the Windows App SDK bootstrapper, its resource indexes and pdfium next to Morph.App")
 
-# The development manifest and its assets, so the build output is a loose
-# package layout that `Add-AppxPackage -Register` accepts as it stands.
+# --- The package manifests ---------------------------------------------------
 #
-# Staged on every build, registered by hand and only when wanted: the app runs
-# unpackaged, and section 13's packaged path is exercised early rather than for
-# the first time at the end of the packaging milestone. The manifest staged here
-# deliberately does NOT carry the shell extension -- see
-# packaging/msix/AppxManifest.dev.xml for why.
+# ONE TEMPLATE, generated twice. There used to be two hand-written manifests
+# with a note in each saying they had to be kept in step, and they were not: the
+# shipping one never grew the PackageDependency on the Windows App Runtime that
+# the development one has. A packaged app does not bootstrap the runtime, it
+# declares it, and getting that wrong produces a process that dies before main
+# with nothing written anywhere. It would have been found by installing the
+# first real package, which is a bad place to find it.
+#
+# The two differ in three strings: the identity, the display name, and nothing
+# else that a person chooses. Everything structural -- the surrogate, the
+# context menu verb, the capability set, the runtime dependency -- is shared,
+# which is the property that was missing.
+set(MORPH_PACKAGE_VERSION "${PROJECT_VERSION}.0")
+set(MORPH_PACKAGE_PUBLISHER "CN=Morph (placeholder)")
+
+# The development registration, staged beside the executable so the build output
+# is a loose package layout `Add-AppxPackage -Register` accepts as it stands.
+# Staged on every build; registered by hand and only when wanted, because
+# registering it puts a verb in the right-click menu of every file on the
+# machine and that is not a build step's decision to make.
+set(MORPH_PACKAGE_NAME "Morph.Converter.Dev")
+set(MORPH_PACKAGE_DISPLAY_NAME "Morph (development)")
+configure_file(
+    "${PROJECT_SOURCE_DIR}/packaging/msix/AppxManifest.xml.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/AppxManifest.dev.xml"
+    @ONLY)
+
+# The shipping manifest. Generated into the build tree rather than staged next
+# to the executable, because the two identities must never be registered at
+# once: they declare the same CLSID, and two packages offering one class is not
+# a configuration anybody has thought about. Section 13's bundle picks it up
+# from here.
+set(MORPH_PACKAGE_NAME "Morph.Converter")
+set(MORPH_PACKAGE_DISPLAY_NAME "Morph")
+configure_file(
+    "${PROJECT_SOURCE_DIR}/packaging/msix/AppxManifest.xml.in"
+    "${CMAKE_BINARY_DIR}/packaging/msix/AppxManifest.xml"
+    @ONLY)
+
 add_custom_command(TARGET morph_app POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${PROJECT_SOURCE_DIR}/packaging/msix/AppxManifest.dev.xml"
+            "${CMAKE_CURRENT_BINARY_DIR}/AppxManifest.dev.xml"
             "$<TARGET_FILE_DIR:morph_app>/AppxManifest.xml"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${PROJECT_SOURCE_DIR}/packaging/msix/Assets"
             "$<TARGET_FILE_DIR:morph_app>/Assets"
     COMMENT "Staging the development package layout for Morph.App")
+
+# The manifest names morph.shellext.dll, and a registered package whose class
+# points at a DLL that is not there is a verb that fails to activate. Every
+# binary already lands in one directory (see CMAKE_RUNTIME_OUTPUT_DIRECTORY in
+# the root list), so this is an ordering dependency and not a copy: what it
+# guarantees is that the DLL exists by the time the layout is staged.
+add_dependencies(morph_app morph_shellext)
