@@ -76,6 +76,19 @@ public:
     // What the broker said about itself. Meaningful only after Connect.
     [[nodiscard]] const ipc::HelloAck& greeting() const noexcept { return greeting_; }
 
+    // "What are these files?" -- section 12.2's probe on drop, asked of the
+    // broker instead of answered locally.
+    //
+    // The app used to link the whole provider table to answer this itself. It
+    // was cheap in CPU and expensive in everything else: WIC, Media Foundation
+    // and PDFium all resident in the window's address space, which is what
+    // section 12.3's "the UI process does no conversion work" is about. The
+    // broker asks the utility worker, which has them loaded anyway.
+    //
+    // One profile per path, in order; an empty string means nothing claimed it.
+    [[nodiscard]] Result IdentifyFiles(const std::vector<std::string>& paths,
+                                       ipc::Identified& into);
+
     // "list of source profiles -> available target profiles with fidelity
     //  ratings" (section 10.2). The app asks this; the shell extension never
     //  does, because it has a memory-mapped table and 8 ms.

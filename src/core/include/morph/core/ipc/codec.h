@@ -24,6 +24,8 @@ namespace morph::ipc {
 
 [[nodiscard]] std::vector<std::byte> Encode(const Hello& message);
 [[nodiscard]] std::vector<std::byte> Encode(const HelloAck& message);
+[[nodiscard]] std::vector<std::byte> Encode(const IdentifyFiles& message);
+[[nodiscard]] std::vector<std::byte> Encode(const Identified& message);
 [[nodiscard]] std::vector<std::byte> Encode(const QueryTargets& message);
 [[nodiscard]] std::vector<std::byte> Encode(const Targets& message);
 [[nodiscard]] std::vector<std::byte> Encode(const SubmitJob& message);
@@ -36,6 +38,8 @@ namespace morph::ipc {
 
 [[nodiscard]] bool Decode(std::span<const std::byte> payload, Hello& into);
 [[nodiscard]] bool Decode(std::span<const std::byte> payload, HelloAck& into);
+[[nodiscard]] bool Decode(std::span<const std::byte> payload, IdentifyFiles& into);
+[[nodiscard]] bool Decode(std::span<const std::byte> payload, Identified& into);
 [[nodiscard]] bool Decode(std::span<const std::byte> payload, QueryTargets& into);
 [[nodiscard]] bool Decode(std::span<const std::byte> payload, Targets& into);
 [[nodiscard]] bool Decode(std::span<const std::byte> payload, SubmitJob& into);
@@ -52,6 +56,8 @@ template <typename T>
 
 template <> constexpr MessageType TypeOf<Hello>() noexcept { return MessageType::kHello; }
 template <> constexpr MessageType TypeOf<HelloAck>() noexcept { return MessageType::kHelloAck; }
+template <> constexpr MessageType TypeOf<IdentifyFiles>() noexcept { return MessageType::kIdentifyFiles; }
+template <> constexpr MessageType TypeOf<Identified>() noexcept { return MessageType::kIdentified; }
 template <> constexpr MessageType TypeOf<QueryTargets>() noexcept { return MessageType::kQueryTargets; }
 template <> constexpr MessageType TypeOf<Targets>() noexcept { return MessageType::kTargets; }
 template <> constexpr MessageType TypeOf<SubmitJob>() noexcept { return MessageType::kSubmitJob; }

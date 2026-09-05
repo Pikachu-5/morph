@@ -214,12 +214,56 @@ ProbeResult ProbeAll(Providers& providers, const ProbeFiles& request) {
         // to questions by position. An unreadable or unidentifiable file is an
         // empty string, not a missing element.
         const std::filesystem::path file = PathFrom(path);
-        FileSource source(file);
-        const std::optional<MediaProfile> profile =
-            providers.executor().Probe(source, HintFor(file));
-        result.profiles.push_back(profile ? profile->Id() : std::string());
+        try {
+            FileSource source(file);
+            const std::optional<MediaProfile> profile =
+                providers.executor().Probe(source, HintFor(file));
+            result.profiles.push_back(profile ? profile->Id() : std::string());
+        } catch (const std::exception&) {
+            // The comment above was a promise this code did not keep. FileSource
+            // THROWS when a path cannot be opened -- deleted between the drop and
+            // the probe, locked, on a share that went away -- and nothing caught
+            // it, so one missing file in a batch unwound the dispatch loop past a
+            // joinable reader thread and terminated the worker. An unopenable
+            // file is exactly the "unreadable" case the promise covers.
+            result.profiles.emplace_back();
+        }
     }
     return result;
+}
+
+// A provider threw. The broker is waiting for a reply of a particular shape and
+// silence would hang the job, so every request type that has an answer gets one
+// -- with the same "one entry per request entry" invariant the happy path keeps.
+[[nodiscard]] Result ReportThrow(Connection& connection, const Request& request,
+                                 std::string_view what) {
+    std::fprintf(stderr, "morph.worker: %s threw: %.*s\n",
+                 std::string(Name(request.type)).c_str(), static_cast<int>(what.size()),
+                 what.data());
+
+    switch (request.type) {
+        case MessageType::kProbeFiles: {
+            ProbeFiles probe;
+            ProbeResult result;
+            if (Decode(request.payload, probe)) result.profiles.resize(probe.paths.size());
+            return connection.Send(result);
+        }
+        case MessageType::kRunTask: {
+            RunTask task;
+            if (!Decode(request.payload, task)) return Result::Ok();
+            TaskDone done;
+            done.jobId = task.jobId;
+            done.taskIndex = task.taskIndex;
+            done.status = static_cast<std::uint8_t>(Status::kInternal);
+            done.inputPath = task.inputPath;
+            done.error = "Morph hit an internal error converting this file: " + std::string(what);
+            return connection.Send(done);
+        }
+        default:
+            // DescribeGraph has no failure shape, and a broker that gets no
+            // graph reports that itself.
+            return Result::Ok();
+    }
 }
 
 TaskDone Fail(const RunTask& task, Status status, std::string message) {
@@ -314,6 +358,34 @@ TaskDone RunOne(Providers& providers, Connection& connection, CurrentTask& curre
     return done;
 }
 
+// One request, answered. Extracted from the loop so that the loop can be a
+// try/catch without the switch drifting two levels to the right.
+[[nodiscard]] Result ServeOne(Providers& providers, Connection& connection,
+                              CurrentTask& current, const Request& request) {
+    switch (request.type) {
+        case MessageType::kDescribeGraph:
+            return connection.Send(DescribeGraphOf(providers));
+
+        case MessageType::kProbeFiles: {
+            ProbeFiles probe;
+            if (!Decode(request.payload, probe)) return Result::Ok();
+            return connection.Send(ProbeAll(providers, probe));
+        }
+        case MessageType::kRunTask: {
+            RunTask task;
+            if (!Decode(request.payload, task)) return Result::Ok();
+            return connection.Send(RunOne(providers, connection, current, task));
+        }
+        default:
+            // A message the worker does not serve is a broker bug. Say so on
+            // stderr, which the broker captures, and keep going: dropping the
+            // connection would turn a mistake into a lost job batch.
+            std::fprintf(stderr, "morph.worker: unexpected %s from the broker\n",
+                         std::string(Name(request.type)).c_str());
+            return Result::Ok();
+    }
+}
+
 }  // namespace
 
 int Serve(Providers& providers, const std::wstring& pipeName) {
@@ -351,33 +423,29 @@ int Serve(Providers& providers, const std::wstring& pipeName) {
         inbox.Finish();
     });
 
+    // Joined however this function leaves, not only on the way out of the loop
+    // below. std::thread's destructor calls std::terminate on a JOINABLE thread,
+    // so before this existed any exception escaping the dispatch loop killed the
+    // process instead of being reported -- which is what an abort() dialog from
+    // a debug worker turned out to be.
+    struct Joiner {
+        std::thread& thread;
+        ~Joiner() { if (thread.joinable()) thread.join(); }
+    } joiner{reader};
+
     Request request;
     while (inbox.Pop(request)) {
+        // A provider that throws fails ITS REQUEST and nothing else. Before this
+        // catch existed the exception unwound the dispatch loop, and unwinding
+        // past a joinable std::thread calls std::terminate -- so one unopenable
+        // file killed the worker in the middle of a batch.
         Result sent = Result::Ok();
-        switch (request.type) {
-            case MessageType::kDescribeGraph: {
-                sent = connection.Send(DescribeGraphOf(providers));
-                break;
-            }
-            case MessageType::kProbeFiles: {
-                ProbeFiles probe;
-                if (!Decode(request.payload, probe)) break;
-                sent = connection.Send(ProbeAll(providers, probe));
-                break;
-            }
-            case MessageType::kRunTask: {
-                RunTask task;
-                if (!Decode(request.payload, task)) break;
-                sent = connection.Send(RunOne(providers, connection, current, task));
-                break;
-            }
-            default:
-                // A message the worker does not serve is a broker bug. Say so on
-                // stderr, which the broker captures, and keep going: dropping the
-                // connection would turn a mistake into a lost job batch.
-                std::fprintf(stderr, "morph.worker: unexpected %s from the broker\n",
-                             std::string(Name(request.type)).c_str());
-                break;
+        try {
+            sent = ServeOne(providers, connection, current, request);
+        } catch (const std::exception& error) {
+            sent = ReportThrow(connection, request, error.what());
+        } catch (...) {
+            sent = ReportThrow(connection, request, "an unrecognised failure");
         }
         if (!sent) break;  // the broker went away mid-reply
     }
@@ -386,6 +454,10 @@ int Serve(Providers& providers, const std::wstring& pipeName) {
     // handle, and closing a handle out from under a blocked read is a race we do
     // not need. Whatever ended the loop -- a dead pipe or a finished batch --
     // ends the read too.
+    //
+    // The Joiner above is the safety net, not the mechanism: it checks joinable,
+    // so this join makes it a no-op on the normal path and it only does anything
+    // when the function is left some other way.
     reader.join();
     connection.Close();
     return 0;

@@ -52,6 +52,36 @@ bool Decode(std::span<const std::byte> payload, HelloAck& into) {
     return true;
 }
 
+// --- IdentifyFiles / Identified ----------------------------------------------
+
+std::vector<std::byte> Encode(const IdentifyFiles& message) {
+    Packer packer;
+    packer.Map(1);
+    PackStrings(packer, "paths", message.paths);
+    return packer.Take();
+}
+
+bool Decode(std::span<const std::byte> payload, IdentifyFiles& into) {
+    const Unpacker unpacker(payload);
+    if (!unpacker.ok()) return false;
+    into.paths = GetStrings(unpacker.root(), "paths");
+    return true;
+}
+
+std::vector<std::byte> Encode(const Identified& message) {
+    Packer packer;
+    packer.Map(1);
+    PackStrings(packer, "profiles", message.profiles);
+    return packer.Take();
+}
+
+bool Decode(std::span<const std::byte> payload, Identified& into) {
+    const Unpacker unpacker(payload);
+    if (!unpacker.ok()) return false;
+    into.profiles = GetStrings(unpacker.root(), "profiles");
+    return true;
+}
+
 // --- QueryTargets / Targets --------------------------------------------------
 
 std::vector<std::byte> Encode(const QueryTargets& message) {

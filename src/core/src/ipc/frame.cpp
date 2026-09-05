@@ -28,27 +28,63 @@ std::uint32_t ReadU32(const std::byte* at) {
            (static_cast<std::uint32_t>(at[2]) << 16) | (static_cast<std::uint32_t>(at[3]) << 24);
 }
 
+// Every tag this build understands, listed rather than bounded.
+//
+// This used to be `raw >= kHello && raw <= kRunTask`, which quietly meant "the
+// enumerator that happens to be numerically last". Adding two client messages
+// after the worker block put them outside the range, and the symptom was not a
+// compile error or a rejected message but a SILENT one: the frame decoded to
+// kInvalid, the broker's dispatch fell to its default, and the client waited
+// for a reply to a message the reader had already thrown away.
+//
+// A list cannot go stale in that direction. A tag left out of it is rejected
+// the same way an unknown one is, which is the behaviour that was wanted.
 bool KnownType(std::uint16_t raw) {
-    return raw >= static_cast<std::uint16_t>(MessageType::kHello) &&
-           raw <= static_cast<std::uint16_t>(MessageType::kRunTask);
+    switch (static_cast<MessageType>(raw)) {
+        case MessageType::kHello:
+        case MessageType::kHelloAck:
+        case MessageType::kIdentifyFiles:
+        case MessageType::kIdentified:
+        case MessageType::kQueryTargets:
+        case MessageType::kTargets:
+        case MessageType::kSubmitJob:
+        case MessageType::kJobAccepted:
+        case MessageType::kProgress:
+        case MessageType::kTaskDone:
+        case MessageType::kJobDone:
+        case MessageType::kCancel:
+        case MessageType::kError:
+        case MessageType::kWorkerHello:
+        case MessageType::kDescribeGraph:
+        case MessageType::kGraphDescription:
+        case MessageType::kProbeFiles:
+        case MessageType::kProbeResult:
+        case MessageType::kRunTask:
+            return true;
+        case MessageType::kInvalid:
+            break;
+    }
+    return false;
 }
 
 }  // namespace
 
 std::string_view Name(MessageType type) noexcept {
     switch (type) {
-        case MessageType::kInvalid:      return "invalid";
-        case MessageType::kHello:        return "Hello";
-        case MessageType::kHelloAck:     return "HelloAck";
-        case MessageType::kQueryTargets: return "QueryTargets";
-        case MessageType::kTargets:      return "Targets";
-        case MessageType::kSubmitJob:    return "SubmitJob";
-        case MessageType::kJobAccepted:  return "JobAccepted";
-        case MessageType::kProgress:     return "Progress";
-        case MessageType::kTaskDone:     return "TaskDone";
-        case MessageType::kJobDone:      return "JobDone";
-        case MessageType::kCancel:       return "Cancel";
-        case MessageType::kError:        return "Error";
+        case MessageType::kInvalid:       return "invalid";
+        case MessageType::kHello:         return "Hello";
+        case MessageType::kHelloAck:      return "HelloAck";
+        case MessageType::kIdentifyFiles: return "IdentifyFiles";
+        case MessageType::kIdentified:    return "Identified";
+        case MessageType::kQueryTargets:  return "QueryTargets";
+        case MessageType::kTargets:       return "Targets";
+        case MessageType::kSubmitJob:     return "SubmitJob";
+        case MessageType::kJobAccepted:   return "JobAccepted";
+        case MessageType::kProgress:      return "Progress";
+        case MessageType::kTaskDone:      return "TaskDone";
+        case MessageType::kJobDone:       return "JobDone";
+        case MessageType::kCancel:        return "Cancel";
+        case MessageType::kError:         return "Error";
 
         case MessageType::kWorkerHello:      return "WorkerHello";
         case MessageType::kDescribeGraph:    return "DescribeGraph";

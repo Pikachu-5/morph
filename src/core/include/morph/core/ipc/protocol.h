@@ -30,7 +30,11 @@ namespace morph::ipc {
 // mismatch closes the pipe rather than negotiating." Negotiation across versions
 // is a source of bugs that only appear in the field, and both halves of Morph
 // ship in the same package.
-inline constexpr std::uint32_t kProtocolVersion = 1;
+// Bumped to 2 when IdentifyFiles and Identified were added. Everything ships in
+// one package, so a mismatch means a stale process rather than an old client --
+// and the handshake closing the pipe on it is exactly right, because a broker
+// from the previous build silently drops the new messages.
+inline constexpr std::uint32_t kProtocolVersion = 2;
 
 enum class MessageType : std::uint16_t {
     kInvalid = 0,
@@ -46,6 +50,8 @@ enum class MessageType : std::uint16_t {
     kJobDone = 9,        // broker -> client
     kCancel = 10,        // client -> broker
     kError = 11,         // broker -> client
+    kIdentifyFiles = 18, // client -> broker
+    kIdentified = 19,    // broker -> client
 
     // The broker-to-worker channel (worker_protocol.h). The tags live in this
     // enum because the frame header carries one MessageType and there is only
@@ -98,6 +104,30 @@ struct HelloAck {
 //  Used by the app, never by the shell extension." The shell extension reads the
 //  memory-mapped capability table instead, because asking here would mean a pipe
 //  round trip while the user's right-click hangs (section 9.2).
+// "What are these files?", asked by the app after a drop.
+//
+// The app could answer this itself -- it did, by linking the whole provider
+// table -- and section 12.2's 8 KiB probe is genuinely cheap. What is not cheap
+// is the CONSEQUENCE: probing in process means WIC, Media Foundation and PDFium
+// are all loaded into the window's address space, and section 12.3's whole
+// argument for the C# escape hatch is that "the UI process does no conversion
+// work". A process holding three codec stacks is doing conversion work in every
+// sense that matters for crash surface and memory.
+//
+// The broker already asks its utility worker this exact question for every job
+// it plans, so the answer costs a round trip to a process that has the providers
+// loaded anyway.
+struct IdentifyFiles {
+    std::vector<std::string> paths;
+};
+
+// One profile per requested path, in the same order. An empty string is "no
+// provider claimed it", which is an answer and not a failure -- the file stays
+// in the selection with a reason next to it.
+struct Identified {
+    std::vector<std::string> profiles;
+};
+
 struct QueryTargets {
     std::vector<std::string> sourceProfiles;
     // Bytes of the largest input, so the estimate comes back scaled. Zero means

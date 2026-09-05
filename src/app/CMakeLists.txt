@@ -61,10 +61,13 @@ target_compile_definitions(morph_app PRIVATE
 
 target_link_libraries(morph_app PRIVATE
     morph::app::core
-    # The provider table, shared with the worker so the two processes cannot
-    # disagree about what a file is (section 12.2 probes here, section 5.1
-    # converts there).
-    morph::providers
+    # NO PROVIDER TABLE. Section 12.2 probes files on drop, and this used to link
+    # morph::providers to do it in process -- which put WIC, Media Foundation and
+    # PDFium in the window's address space for the sake of reading 8 KiB per
+    # file. The app asks the broker now (ipc::IdentifyFiles), which asks the
+    # utility worker, which has them loaded anyway. Section 12.3's "the UI
+    # process does no conversion work" is true of the link line as well as of
+    # the CPU.
     "${MORPH_WINAPPSDK_LIB}"
     windowsapp
     shell32)

@@ -33,8 +33,10 @@
 #include <cmath>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <winrt/base.h>
@@ -64,7 +66,6 @@
 #include "app/model.h"
 #include "morph/core/naming.h"
 #include "morph/core/stream.h"
-#include "providers.h"
 
 namespace xaml = winrt::Microsoft::UI::Xaml;
 namespace controls = winrt::Microsoft::UI::Xaml::Controls;
@@ -119,51 +120,70 @@ std::wstring FileNameOf(const std::string& path) {
     return std::filesystem::path(path).filename().wstring();
 }
 
-// The real prober behind AppModel's injected one (section 12.2: "probe the files
-// (cheap, 8 KiB each)").
+// The answers to section 12.2's "probe the files on drop", held between the
+// round trip that fetched them and the two models that ask for them.
 //
-// It runs the SAME provider table the worker converts with, so the app cannot
-// offer a target for a file the worker will then refuse to read. Probing is not
-// converting -- section 12.3's "the UI process does no conversion work" is about
-// where the CPU goes, and this reads a few kilobytes and looks at them -- but
-// the table is linked here all the same, which is the one thing about this
-// process that is heavier than it looks. Moving it to a round trip to the
-// worker, which already has every provider loaded, is a change to this function
-// and to nothing else: that is what the Prober seam is for.
-class FileProber {
+// THIS USED TO BE A PROBER THAT DID THE WORK. It linked the whole provider
+// table into the window and read 8 KiB of every dropped file, which is cheap in
+// CPU and expensive in everything else: WIC, Media Foundation and PDFium all
+// resident in the UI process. Section 12.3's argument for the C# escape hatch
+// is that "the UI process does no conversion work", and a process holding three
+// codec stacks is doing conversion work in every sense that matters for crash
+// surface, for memory, and for what a rewrite would have to reproduce.
+//
+// AppModel::Drop calls its Prober SYNCHRONOUSLY, and it runs on the UI thread,
+// so the round trip cannot happen inside it. The table is filled on the
+// background thread first and the Prober becomes a lookup -- which is what the
+// injected seam was for, and why Drop never had to change.
+class ProbeTable {
 public:
-    explicit FileProber(std::shared_ptr<worker::Providers> providers)
-        : providers_(std::move(providers)) {}
+    // One round trip's worth of answers, in the order they were asked for.
+    void Learn(const std::vector<std::string>& paths, const ipc::Identified& identified) {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        for (std::size_t i = 0; i < paths.size(); ++i) {
+            const std::string profile =
+                i < identified.profiles.size() ? identified.profiles[i] : std::string();
+            answers_[paths[i]] = profile;
+        }
+    }
 
-    ProbeAnswer operator()(const std::string& path) const {
+    // Nothing could be asked. Recorded as its own state rather than as "not
+    // recognised", because those are different sentences and a user who is told
+    // the wrong one goes looking for the wrong problem.
+    void Unavailable(const std::vector<std::string>& paths, std::string reason) {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        unreachable_ = std::move(reason);
+        for (const std::string& path : paths) answers_.erase(path);
+    }
+
+    [[nodiscard]] ProbeAnswer operator()(const std::string& path) const {
         ProbeAnswer answer;
-        const std::filesystem::path file(path);
 
+        // The size is read here rather than fetched. It is a directory entry,
+        // not a decode -- no provider is involved, and asking the broker for it
+        // would be a round trip to learn something already on this machine.
         std::error_code ec;
-        const auto size = std::filesystem::file_size(file, ec);
+        const auto size = std::filesystem::file_size(std::filesystem::path(path), ec);
         if (!ec) answer.sizeBytes = size;
 
-        FileSource source(file);
-        PathHint hint;
-        hint.filename = file.filename().string();
-        hint.extension = file.extension().string();
-        for (char& c : hint.extension) {
-            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        const std::lock_guard<std::mutex> lock(mutex_);
+        const auto found = answers_.find(path);
+        if (found != answers_.end() && !found->second.empty()) {
+            answer.profile = found->second;
+            return answer;
         }
 
-        if (const std::optional<MediaProfile> profile =
-                providers_->executor().Probe(source, hint)) {
-            answer.profile = profile->Id();
-        } else {
-            // Section 12.2 again: a real reason, and the name of the file it is
-            // about, because a list of five rows needs to say which one.
-            answer.error = "Morph does not recognise what is inside " + hint.filename + ".";
-        }
+        const std::string name = std::filesystem::path(path).filename().string();
+        answer.error = found == answers_.end() && !unreachable_.empty()
+                           ? "Morph could not reach the conversion engine: " + unreachable_
+                           : "Morph does not recognise what is inside " + name + ".";
         return answer;
     }
 
 private:
-    std::shared_ptr<worker::Providers> providers_;
+    mutable std::mutex mutex_;
+    std::unordered_map<std::string, std::string> answers_;
+    std::string unreachable_;
 };
 
 class Shell;
@@ -202,8 +222,10 @@ public:
     void Open(std::vector<std::string> paths) { pending_ = std::move(paths); }
 
     void Start() {
-        providers_ = std::make_shared<worker::Providers>();
-        model_ = std::make_unique<AppModel>(FileProber{providers_});
+        probes_ = std::make_shared<ProbeTable>();
+        model_ = std::make_unique<AppModel>([probes = probes_](const std::string& path) {
+            return (*probes)(path);
+        });
 
         // A XAML exception raised on the dispatcher after startup reaches no
         // try/catch anywhere -- the process simply exits, with no window and
@@ -1085,9 +1107,20 @@ private:
         groups_.Children().Clear();
 
         std::thread([this, paths = std::move(paths)]() mutable {
-            // The model belongs to the UI thread, so the probing is done against
-            // a staging copy here and the answers are applied there.
-            AppModel staging{FileProber{providers_}};
+            // One round trip for the whole drop, not one per file: the broker
+            // hands the batch to its utility worker in a single message.
+            ipc::Identified identified;
+            if (const Result told = client_.IdentifyFiles(paths, identified); told) {
+                probes_->Learn(paths, identified);
+            } else {
+                probes_->Unavailable(paths, told.message());
+            }
+
+            // The model belongs to the UI thread, so the answers are collected
+            // against a staging copy here and applied there.
+            AppModel staging{[probes = probes_](const std::string& path) {
+                return (*probes)(path);
+            }};
             staging.Drop(paths);
 
             ipc::Targets targets;
@@ -1148,7 +1181,7 @@ private:
     winrt::com_ptr<::ITaskbarList3> taskbar_;
     HWND hwnd_ = nullptr;
 
-    std::shared_ptr<worker::Providers> providers_;
+    std::shared_ptr<ProbeTable> probes_;
     std::unique_ptr<AppModel> model_;
     BrokerClient client_;
 

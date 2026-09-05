@@ -606,3 +606,53 @@ TEST_CASE("two clients are served one after another", "[ipc][pipe]") {
     brokerThread.join();
     CHECK(served.load() == 2);
 }
+
+// --- IdentifyFiles / Identified ----------------------------------------------
+//
+// Section 12.2's probe on drop, asked of the broker instead of answered in the
+// window. The invariant that matters is positional: the app matches answers to
+// files by index, so a reply that loses its alignment mislabels every file
+// after the gap rather than failing.
+
+TEST_CASE("IdentifyFiles round-trips its paths", "[ipc]") {
+    ipc::IdentifyFiles sent;
+    sent.paths = {R"(C:\a\one.md)", R"(C:\b\two.png)", R"(\server\share\three.docx)"};
+
+    ipc::IdentifyFiles got;
+    REQUIRE(Decode(Encode(sent), got));
+    CHECK(got.paths == sent.paths);
+}
+
+TEST_CASE("Identified round-trips one profile per path, order kept", "[ipc]") {
+    ipc::Identified sent;
+    // The middle one is empty on purpose: "nothing claimed it" is an answer and
+    // has to survive the wire as a position, not be compacted away.
+    sent.profiles = {"text/markdown", "", "application/pdf"};
+
+    ipc::Identified got;
+    REQUIRE(Decode(Encode(sent), got));
+    REQUIRE(got.profiles.size() == 3);
+    CHECK(got.profiles[0] == "text/markdown");
+    CHECK(got.profiles[1].empty());
+    CHECK(got.profiles[2] == "application/pdf");
+}
+
+TEST_CASE("An empty identify request is still a valid message", "[ipc]") {
+    ipc::IdentifyFiles got;
+    REQUIRE(Decode(Encode(ipc::IdentifyFiles{}), got));
+    CHECK(got.paths.empty());
+
+    ipc::Identified reply;
+    REQUIRE(Decode(Encode(ipc::Identified{}), reply));
+    CHECK(reply.profiles.empty());
+}
+
+TEST_CASE("The identify messages carry their own type tags", "[ipc]") {
+    // The frame header carries one MessageType for both directions, so a
+    // collision here would route a reply into a request decoder.
+    CHECK(ipc::TypeOf<ipc::IdentifyFiles>() == ipc::MessageType::kIdentifyFiles);
+    CHECK(ipc::TypeOf<ipc::Identified>() == ipc::MessageType::kIdentified);
+    CHECK(ipc::TypeOf<ipc::IdentifyFiles>() != ipc::TypeOf<ipc::Identified>());
+    CHECK(Name(ipc::MessageType::kIdentifyFiles) == "IdentifyFiles");
+    CHECK(Name(ipc::MessageType::kIdentified) == "Identified");
+}

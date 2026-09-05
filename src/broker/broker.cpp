@@ -314,6 +314,11 @@ void Broker::Serve(ipc::Connection connection) {
         if (!frame) break;
 
         switch (frame->type) {
+            case ipc::MessageType::kIdentifyFiles: {
+                ipc::IdentifyFiles request;
+                if (Decode(frame->payload, request)) HandleIdentify(*client, request);
+                break;
+            }
             case ipc::MessageType::kQueryTargets: {
                 ipc::QueryTargets request;
                 if (Decode(frame->payload, request)) HandleQueryTargets(*client, request);
@@ -349,6 +354,36 @@ void Broker::Serve(ipc::Connection connection) {
     // the shell extension closes its connection as a matter of course.
     client->Detach();
     clients_.fetch_sub(1);
+}
+
+void Broker::HandleIdentify(ClientLink& client, const ipc::IdentifyFiles& request) {
+    ipc::Identified reply;
+    if (request.paths.empty()) {
+        client.Send(reply);
+        return;
+    }
+    // The same cap SubmitJob uses. A client that drops a hundred thousand files
+    // should be told no by the same number in both places, or the app can offer
+    // a selection the broker will then refuse to convert.
+    if (request.paths.size() > kMaxInputsPerJob) {
+        SendError(client, 0, Status::kResourceLimit,
+                  "That is more files than Morph will take at once.");
+        return;
+    }
+
+    std::vector<std::string> profiles;
+    // A probe that fails is not an error for the CLIENT: the utility worker
+    // being unavailable means nothing was identified, and the app shows every
+    // file with a reason rather than an empty window. Sending an Error here
+    // would take the whole drop down over one unreadable file.
+    if (const Result probed = ProbeInputs(request.paths, profiles); !probed) {
+        reply.profiles.assign(request.paths.size(), std::string());
+        client.Send(reply);
+        return;
+    }
+    reply.profiles = std::move(profiles);
+    reply.profiles.resize(request.paths.size());  // one answer per path, always
+    client.Send(reply);
 }
 
 void Broker::HandleQueryTargets(ClientLink& client, const ipc::QueryTargets& request) {

@@ -237,6 +237,58 @@ TEST_CASE("The broker converts a file end to end", "[broker][integration]") {
         }
     }
 
+    SECTION("it identifies dropped files by their bytes, over the pipe") {
+        // Section 12.2's probe on drop, which the app no longer does itself.
+        // The wire test in test_ipc covers the encoding; this is the half that
+        // needs a real broker, a real utility worker and a real file, because
+        // the answer comes from a provider in another process.
+        const std::filesystem::path markdown = WriteMarkdown("dropped.md");
+
+        // Deliberately misnamed, and the interesting half of this test.
+        //
+        // Section 5's "a renamed file has to work" has a limit that is worth
+        // stating rather than discovering: it holds for formats with a
+        // SIGNATURE, and markdown has none. Text with a .png name is therefore
+        // not identified as markdown -- there is nothing in the bytes to say so.
+        // What must never happen is the other failure, where the extension is
+        // believed and a text file is handed to an image decoder, so that is
+        // what is asserted below.
+        const std::filesystem::path lying = markdown.parent_path() / "dropped.png";
+        std::filesystem::copy_file(markdown, lying,
+                                   std::filesystem::copy_options::overwrite_existing);
+
+        const std::filesystem::path missing = markdown.parent_path() / "not-here.md";
+        std::error_code ec;
+        std::filesystem::remove(missing, ec);
+
+        ipc::IdentifyFiles request;
+        request.paths = {markdown.string(), lying.string(), missing.string()};
+        REQUIRE(connection.Send(request));
+
+        ipc::Identified identified;
+        REQUIRE(connection.ReceiveAs(identified));
+
+        // One answer per path, in order. The app matches them by index, so a
+        // reply that dropped the unreadable one would mislabel every file after
+        // it rather than fail.
+        REQUIRE(identified.profiles.size() == request.paths.size());
+        CHECK(identified.profiles[0] == "text/markdown");
+        // Not claimed by the name it is wearing. Unidentified is the correct
+        // answer here; image/png would be a text file sent to a PNG decoder.
+        CHECK(identified.profiles[1] != "image/png");
+        // A file that is not there is not identified, and that is an answer
+        // rather than a failure -- it used to be the end of the worker, because
+        // FileSource throws on a path it cannot open and nothing caught it.
+        CHECK(identified.profiles[2].empty());
+    }
+
+    SECTION("an identify request with nothing in it is answered, not refused") {
+        REQUIRE(connection.Send(ipc::IdentifyFiles{}));
+        ipc::Identified identified;
+        REQUIRE(connection.ReceiveAs(identified));
+        CHECK(identified.profiles.empty());
+    }
+
     SECTION("it publishes a menu table that agrees with what it answers") {
         // Section 9.2's whole claim is that the shell extension can build the
         // submenu without asking. That is only true if the table it reads says

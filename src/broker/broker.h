@@ -60,6 +60,7 @@ public:
 
 private:
     void Serve(ipc::Connection connection);
+    void HandleIdentify(ClientLink& client, const ipc::IdentifyFiles& request);
     void HandleQueryTargets(ClientLink& client, const ipc::QueryTargets& request);
     void HandleSubmit(const std::shared_ptr<ClientLink>& client, const ipc::SubmitJob& request);
 

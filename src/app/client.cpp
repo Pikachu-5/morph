@@ -56,6 +56,22 @@ Result BrokerClient::Handshake() {
     return Result::Ok();
 }
 
+Result BrokerClient::IdentifyFiles(const std::vector<std::string>& paths,
+                                   ipc::Identified& into) {
+    if (!connection_.Open()) {
+        return Result::Error(Status::kIoError, "Not connected to the Morph broker.");
+    }
+
+    ipc::IdentifyFiles request;
+    request.paths = paths;
+
+    {
+        const std::lock_guard lock(write_);
+        if (const Result sent = connection_.Send(request); !sent) return sent;
+    }
+    return connection_.ReceiveAs(into);
+}
+
 Result BrokerClient::QueryTargets(const std::vector<std::string>& sourceProfiles,
                                   std::uint64_t largestInputBytes, ipc::Targets& into) {
     if (!connection_.Open()) {
