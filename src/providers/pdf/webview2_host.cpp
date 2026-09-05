@@ -370,6 +370,25 @@ void Host::ThreadMain() {
 
     // The user data folder must be writable and must not be shared with another
     // WebView2 started with different options.
+    //
+    // IN %TEMP% AND NOT PRUNED, both deliberately. Nothing here is worth keeping
+    // and nothing here needs deleting, which was measured rather than assumed:
+    // twenty conversions leave it at 12.56 MB, and five workers KILLED mid-render
+    // -- which is not an edge case, since section 3.1 makes the worker expendable
+    // and the job object kills it -- leave it at 12.59 MB. Edge prunes its own
+    // BrowserMetrics buffers at the next startup; the Crashpad directory stays
+    // empty; and the largest thing in it is a GPU shader cache that is BOUNDED
+    // and is part of why a cold render costs the same as a warm one.
+    //
+    // A folder seen at 300 MB is not this growing. It is a WebView2 that failed
+    // to initialise several hundred times in a row, which is its own bug and was
+    // one (the worker's job object capped it below the process count a browser
+    // needs).
+    //
+    // %TEMP% is then the honest location: a cold environment and a warm one cost
+    // the same 0.5 s, so this folder is genuinely disposable and anything that
+    // wipes it -- Storage Sense, a user, a reboot on some machines -- costs
+    // nothing. Disposable is a better property than pruned.
     wchar_t tempPath[MAX_PATH]{};
     ::GetTempPathW(MAX_PATH, tempPath);
     const std::wstring userData = std::wstring(tempPath) + L"morph-webview2";
