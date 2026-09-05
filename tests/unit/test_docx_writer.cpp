@@ -268,6 +268,119 @@ TEST_CASE("two sibling ordered lists restart rather than continue",
     CHECK(back.blocks[2].As<ListBlock>()->start == 1);
 }
 
+TEST_CASE("a numbered list inside a bulleted one keeps its numbers",
+          "[docx][write][roundtrip]") {
+    // A numbering definition gives one marker format to each of its nine levels,
+    // so the two lists cannot share the bullet ladder -- and they cannot be
+    // split into two numIds either, because a change of numId is how
+    // WordprocessingML says "a different list" and would un-nest the inner one.
+    // What is left is an abstractNum whose ladder matches this tree: bullet at
+    // level 0, decimal at level 1.
+    const Document back = RoundTrip(FromMarkdown("- outer\n  1. one\n  2. two\n"));
+
+    REQUIRE(back.blocks.size() == 1);
+    const auto* outer = back.blocks[0].As<ListBlock>();
+    REQUIRE(outer != nullptr);
+    CHECK_FALSE(outer->ordered);
+    REQUIRE(outer->items.size() == 1);
+
+    const ListBlock* inner = nullptr;
+    for (const Block& block : outer->items[0].blocks) {
+        if (const auto* found = block.As<ListBlock>()) inner = found;
+    }
+    REQUIRE(inner != nullptr);
+    CHECK(inner->ordered);
+    CHECK(inner->items.size() == 2);
+    CHECK(PlainText(back.blocks) == "outer\none\ntwo\n");
+}
+
+TEST_CASE("a nested ordered list keeps its own start number", "[docx][write][roundtrip]") {
+    // The first number lives on the numbering definition, as a startOverride
+    // against the nested LEVEL rather than against the list.
+    //
+    // Built as IR rather than from Markdown because CommonMark will not let an
+    // ordered list interrupt a paragraph unless it starts at 1, so "1. outer"
+    // followed by an indented "3." is not a nested list in the source at all.
+    Document document;
+    ListItem outerItem;
+    outerItem.blocks.push_back(
+        Block::Of(Paragraph{{Inline::Of(Text{"outer", {}})}, {}, {}, std::nullopt}));
+    outerItem.blocks.push_back(Block::Of(ListBlock{
+        true, 3, true,
+        {ListItem{{Block::Of(Paragraph{{Inline::Of(Text{"three", {}})}, {}, {}, std::nullopt})},
+                  {}},
+         ListItem{{Block::Of(Paragraph{{Inline::Of(Text{"four", {}})}, {}, {}, std::nullopt})},
+                  {}}}}));
+    document.blocks.push_back(Block::Of(ListBlock{true, 1, false, {std::move(outerItem)}}));
+
+    const Document back = RoundTrip(document);
+
+    const auto* outer = back.blocks[0].As<ListBlock>();
+    REQUIRE(outer != nullptr);
+    CHECK(outer->start == 1);
+    REQUIRE(outer->items.size() == 1);
+
+    const ListBlock* inner = nullptr;
+    for (const Block& block : outer->items[0].blocks) {
+        if (const auto* found = block.As<ListBlock>()) inner = found;
+    }
+    REQUIRE(inner != nullptr);
+    CHECK(inner->ordered);
+    CHECK(inner->start == 3);
+}
+
+TEST_CASE("sub-lists at one depth that disagree are declared, not silently merged",
+          "[docx][write][fidelity]") {
+    // The residual limit of the level-ladder encoding, and the reason it is a
+    // note rather than a fix: a level is ONE w:lvl for the whole tree, so two
+    // sub-lists under one parent that want different markers -- or different
+    // first numbers -- have no spelling at all. The first one wins and the
+    // writer says which loss it took.
+    const auto item = [](std::string_view text, Block nested) {
+        return ListItem{{Block::Of(Paragraph{
+                             {Inline::Of(Text{std::string(text), {}})}, {}, {}, std::nullopt}),
+                         std::move(nested)},
+                        {}};
+    };
+    const auto leaf = [](bool ordered, int start, std::string_view text) {
+        return Block::Of(ListBlock{
+            ordered, start, true,
+            {ListItem{{Block::Of(Paragraph{
+                          {Inline::Of(Text{std::string(text), {}})}, {}, {}, std::nullopt})},
+                      {}}}});
+    };
+
+    Document document;
+    document.blocks.push_back(Block::Of(ListBlock{false,
+                                                  1,
+                                                  false,
+                                                  {item("first", leaf(false, 1, "bullet")),
+                                                   item("second", leaf(true, 7, "seven"))}}));
+
+    std::vector<std::byte> bytes;
+    const Result result = WriteDocx(document, {}, bytes);
+    REQUIRE(result.ok());
+
+    bool markers = false;
+    for (const FidelityNote& note : result.notes()) {
+        markers |= note.code == "list-level-markers-shared";
+    }
+    CHECK(markers);
+
+    // And the loss is the declared one: the second sub-list came back looking
+    // like the first, not like something neither of them was.
+    const Document back = Read(bytes);
+    const auto* outer = back.blocks[0].As<ListBlock>();
+    REQUIRE(outer != nullptr);
+    REQUIRE(outer->items.size() == 2);
+    const ListBlock* second = nullptr;
+    for (const Block& block : outer->items[1].blocks) {
+        if (const auto* found = block.As<ListBlock>()) second = found;
+    }
+    REQUIRE(second != nullptr);
+    CHECK_FALSE(second->ordered);
+}
+
 // --- Tables (mapping 3, backwards) -------------------------------------------
 
 TEST_CASE("a table round-trips", "[docx][write][roundtrip]") {

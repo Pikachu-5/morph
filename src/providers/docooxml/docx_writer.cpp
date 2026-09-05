@@ -19,6 +19,7 @@
 //   are dropped horizontally and re-emitted vertically.  ->  WriteTable
 
 #include <algorithm>
+#include <array>
 #include <map>
 #include <string>
 #include <vector>
@@ -72,31 +73,56 @@ std::string_view AlignmentValue(Alignment alignment) {
 
 // --- List numbering ----------------------------------------------------------
 
+// Word's maximum nesting for a numbering definition, and more than the IR's
+// depth cap allows anyone to reach.
+constexpr int kNumberingLevels = 9;
+
+// The marker format of each level of one list, outermost first: "bullet,
+// decimal, bullet, ..." for a numbered list inside a bulleted one inside a
+// bulleted one. An abstractNum is exactly this ladder written down, which is why
+// two lists can share one only when their ladders agree all the way down.
+using LevelLadder = std::array<bool, kNumberingLevels>;
+
 // Collects the numbering definitions the document needs. One abstractNum per
-// distinct (ordered, start) shape at the top level, and one num per list, so
-// that two sibling ordered lists restart independently rather than continuing
-// each other.
+// distinct level-format ladder, and one num per top-level list, so that two
+// sibling ordered lists restart independently rather than continuing each other.
 class ListNumbering {
 public:
+    // What a level's format and first number could not be recorded as, because
+    // an earlier list at the same depth in the same tree already claimed them.
+    struct Conflict {
+        bool format = false;
+        bool start = false;
+    };
+
     // Returns the numId for a new top-level list.
     [[nodiscard]] std::string Allocate(bool ordered, int start) {
         const int numId = nextNumId_++;
-        Instance instance{numId, ordered, {}};
-        instance.starts[0] = start;
+        Instance instance{numId, {}};
+        instance.levels.emplace(0, Level{ordered, start});
         instances_.push_back(std::move(instance));
         return std::to_string(numId);
     }
 
-    // A nested list's own starting number. WordprocessingML says it with a
-    // startOverride on that level, and without it a sub-list beginning at 2
-    // silently begins at 1 -- the numbering is a property of the definition, not
-    // of the paragraphs, so there is nowhere else to put it.
-    void SetStart(std::string_view numId, int level, int start) {
+    // A nested list's own kind and starting number. Both are properties of the
+    // LEVEL in WordprocessingML -- the format on the abstractNum's w:lvl, the
+    // first number on a startOverride against it -- and there is nowhere else to
+    // put either: the numbering belongs to the definition, not to the
+    // paragraphs, so without this a sub-list beginning at 2 silently begins at
+    // 1 and a numbered sub-list silently renders as bullets.
+    //
+    // Being a property of the level is also the limit. Every sub-list at the
+    // same depth of one tree shares one w:lvl, so when two of them disagree only
+    // the first can be spelled. The caller declares the loss.
+    Conflict SetLevel(std::string_view numId, int level, bool ordered, int start) {
+        if (level >= kNumberingLevels) return {};
         for (Instance& instance : instances_) {
             if (std::to_string(instance.numId) != numId) continue;
-            instance.starts[level] = start;
-            return;
+            const auto [entry, inserted] = instance.levels.emplace(level, Level{ordered, start});
+            if (inserted) return {};
+            return Conflict{entry->second.ordered != ordered, entry->second.start != start};
         }
+        return {};
     }
 
     [[nodiscard]] bool Empty() const noexcept { return instances_.empty(); }
@@ -107,13 +133,23 @@ public:
             "\n"
             R"(<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">)";
 
-        // Two abstract definitions cover everything the IR can express: a bullet
-        // ladder and a decimal ladder. Nine levels each, which is Word's maximum
-        // and more than the IR's depth cap allows anyone to reach.
-        for (int abstractId = 0; abstractId < 2; ++abstractId) {
-            const bool ordered = abstractId == 1;
+        // Ladders first, deduplicated: a document of ten plain bulleted lists
+        // still needs only one abstractNum, and the common case stays the file
+        // Word itself would write.
+        std::vector<LevelLadder> ladders;
+        std::vector<std::size_t> abstractOf;
+        abstractOf.reserve(instances_.size());
+        for (const Instance& instance : instances_) {
+            const LevelLadder ladder = LadderOf(instance);
+            const auto found = std::find(ladders.begin(), ladders.end(), ladder);
+            abstractOf.push_back(static_cast<std::size_t>(found - ladders.begin()));
+            if (found == ladders.end()) ladders.push_back(ladder);
+        }
+
+        for (std::size_t abstractId = 0; abstractId < ladders.size(); ++abstractId) {
             xml += R"(<w:abstractNum w:abstractNumId=")" + std::to_string(abstractId) + R"(">)";
-            for (int level = 0; level < 9; ++level) {
+            for (int level = 0; level < kNumberingLevels; ++level) {
+                const bool ordered = ladders[abstractId][static_cast<std::size_t>(level)];
                 // Each level indents half an inch further, which is what Word's
                 // own built-in list styles do.
                 const int indent = 720 * (level + 1);
@@ -135,19 +171,20 @@ public:
             xml += R"(</w:abstractNum>)";
         }
 
-        for (const Instance& instance : instances_) {
+        for (std::size_t i = 0; i < instances_.size(); ++i) {
+            const Instance& instance = instances_[i];
             xml += R"(<w:num w:numId=")" + std::to_string(instance.numId) + R"(">)";
-            xml += R"(<w:abstractNumId w:val=")" + std::string(instance.ordered ? "1" : "0") +
-                   R"("/>)";
-            // Every instance gets an explicit startOverride, which is what makes
-            // two sibling ordered lists restart rather than continue -- the
-            // reader's mapping 4, written from the other side.
-            if (instance.ordered) {
-                for (const auto& [level, start] : instance.starts) {
-                    xml += R"(<w:lvlOverride w:ilvl=")" + std::to_string(level) +
-                           R"("><w:startOverride w:val=")" + std::to_string(start) +
-                           R"("/></w:lvlOverride>)";
-                }
+            xml += R"(<w:abstractNumId w:val=")" + std::to_string(abstractOf[i]) + R"("/>)";
+            // Every ordered level gets an explicit startOverride, which is what
+            // makes two sibling ordered lists restart rather than continue --
+            // the reader's mapping 4, written from the other side. A
+            // startOverride carries no format of its own, so the level's markers
+            // still come from the abstractNum above.
+            for (const auto& [level, definition] : instance.levels) {
+                if (!definition.ordered) continue;
+                xml += R"(<w:lvlOverride w:ilvl=")" + std::to_string(level) +
+                       R"("><w:startOverride w:val=")" + std::to_string(definition.start) +
+                       R"("/></w:lvlOverride>)";
             }
             xml += R"(</w:num>)";
         }
@@ -157,13 +194,32 @@ public:
     }
 
 private:
+    struct Level {
+        bool ordered;
+        int start;
+    };
+
     struct Instance {
         int numId;
-        bool ordered;
-        // Level -> first number. Level 0 is always present; deeper levels appear
-        // when a nested list starts at something other than 1.
-        std::map<int, int> starts;
+        // ilvl -> the kind and first number of the lists at that depth. Level 0
+        // is always present; deeper levels appear as nested lists are written.
+        std::map<int, Level> levels;
     };
+
+    // Levels no list in this tree reached still need a w:lvl, because the
+    // abstractNum has nine of them either way. They inherit the deepest level
+    // that was reached, so a ladder is never split by a depth nobody uses.
+    [[nodiscard]] static LevelLadder LadderOf(const Instance& instance) {
+        LevelLadder ladder{};
+        bool ordered = false;
+        for (int level = 0; level < kNumberingLevels; ++level) {
+            const auto found = instance.levels.find(level);
+            if (found != instance.levels.end()) ordered = found->second.ordered;
+            ladder[static_cast<std::size_t>(level)] = ordered;
+        }
+        return ladder;
+    }
+
     std::vector<Instance> instances_;
     int nextNumId_ = 1;
 };
@@ -627,28 +683,30 @@ void Writer::WriteList(const ListBlock& list, const std::string& numId, int leve
             if (const auto* nested = block.As<ListBlock>()) {
                 // A nested list continues in the same numId at the next level,
                 // which is exactly the flat encoding the reader reconstructs.
-                //
-                // KNOWN LIMITATION, found by the round-trip property test and
-                // left deliberately: a nested list of a DIFFERENT kind from its
-                // parent -- a numbered list inside a bulleted one -- inherits
-                // the parent's markers, because both abstract definitions above
-                // use one format for all nine levels. Fixing it means an
-                // abstractNum per level-format ladder; giving the nested list
-                // its own numId does not work, since a change of numId is how
-                // WordprocessingML says "a different list" and the reader would
-                // un-nest it (mapping 2 in docx_reader.cpp).
-                if (nested->ordered && nested->start != 1) {
-                    // Recorded on the numbering definition, which is the only
-                    // place WordprocessingML will take it. That makes it a
-                    // property of the whole numId rather than of this list, so
-                    // two sub-lists at the same level under one parent cannot
-                    // start at different numbers -- the second one inherits the
-                    // first one's override. Restarting properly needs a fresh
-                    // numId, and a change of numId is how the format says "a
-                    // different list", which would un-nest it (mapping 2 in
-                    // docx_reader.cpp). Known limitation, found by the round-trip
-                    // property test.
-                    numbering_.SetStart(numId, level + 1, nested->start);
+                // Its kind and its first number go on the numbering definition
+                // for that level -- the only place WordprocessingML will take
+                // either. Giving the nested list its own numId instead does not
+                // work: a change of numId is how the format says "a different
+                // list", and the reader would un-nest it (mapping 2 in
+                // docx_reader.cpp).
+                const ListNumbering::Conflict conflict =
+                    numbering_.SetLevel(numId, level + 1, nested->ordered, nested->start);
+                // Which is also the one thing this cannot express. A level's
+                // w:lvl is shared by every sub-list at that depth of the tree,
+                // so two sub-lists under one parent that disagree have no
+                // spelling; the first one wins and the loss is declared rather
+                // than made silently.
+                if (conflict.format) {
+                    Note("list-level-markers-shared",
+                         "Sub-lists at the same depth used different markers; Word gives one "
+                         "marker format to a whole level, so all of them took the first one's.");
+                }
+                if (conflict.start) {
+                    Note("list-level-start-shared",
+                         "Sub-lists at the same depth began at different numbers; Word keeps a "
+                         "level's first number on the numbering definition, so all of them "
+                         "began at the first one's.",
+                         Fidelity::High);
                 }
                 WriteList(*nested, numId, level + 1, depth + 1);
                 continue;

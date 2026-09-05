@@ -51,6 +51,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <map>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -182,12 +184,27 @@ Inlines MakeInlines(Rng& rng, int depth) {
 // both containers as a PARAGRAPH PROPERTY -- numPr for a list item, a style
 // name for a quote -- and a paragraph has one style, so some combinations have
 // no spelling at all.
+// What the lists at one depth of one top-level list tree have already been
+// generated as. Word keeps both the marker format and the first number on the
+// numbering definition for the LEVEL, which every sub-list at that depth shares,
+// so two sub-lists under one parent that disagree are not a document any DOCX
+// can hold -- the writer says so with a fidelity note rather than pretending.
+// The generator claims a kind and a start per depth and reuses them, which is
+// the shape a real document has.
+struct LadderLevel {
+    bool ordered = false;
+    int start = 1;
+};
+using LevelLadder = std::map<int, LadderLevel>;
+
 struct Where {
     bool insideItem = false;
     bool insideQuote = false;
-    // The kind of the list this block sits inside, meaningful only when
-    // insideItem is set.
-    bool orderedList = false;
+    // The enclosing top-level list's ladder, and how deep in it this block sits.
+    // Both meaningful only when insideItem is set; a top-level list starts a
+    // ladder of its own.
+    std::shared_ptr<LevelLadder> ladder;
+    int listLevel = 0;
 };
 
 Blocks MakeBlocks(Rng& rng, int depth, std::size_t count, Where where = {});
@@ -261,18 +278,22 @@ Block MakeBlock(Rng& rng, int depth, Where where) {
     if (roll < 66) return Block::Of(HorizontalRule{});
     if (roll < 80) {
         ListBlock list;
-        // A NESTED LIST KEEPS ITS PARENT'S KIND. Word's numbering definitions
-        // give one marker format to all nine levels, so a numbered list inside a
-        // bulleted one comes back bulleted -- a known limitation recorded in
-        // docx_writer.cpp's WriteList, and one this file is not the place to
-        // assert away.
-        list.ordered = where.insideItem ? where.orderedList : rng.Chance(50);
-        // A NESTED LIST STARTS AT 1. Word keeps a list's first number on the
-        // numbering definition, which the whole nested tree shares, so two
-        // sub-lists at the same level cannot begin at different numbers --
-        // recorded in docx_writer.cpp's WriteList and not something to assert
-        // away here.
-        list.start = (list.ordered && !where.insideItem) ? 1 + static_cast<int>(rng.Below(3)) : 1;
+        // A NESTED LIST IS FREE TO BE ITS OWN KIND and to start at its own
+        // number -- a numbered list inside a bulleted one is written with an
+        // abstractNum whose ladder of formats matches the tree, and a sub-list
+        // beginning at 3 with a startOverride against that level. What it is not
+        // free to do is DISAGREE WITH ITS COUSINS: the level is one w:lvl for the
+        // whole tree, so the first list at a depth fixes both for the rest.
+        auto ladder = where.ladder ? where.ladder : std::make_shared<LevelLadder>();
+        auto claimed = ladder->find(where.listLevel);
+        if (claimed == ladder->end()) {
+            LadderLevel level;
+            level.ordered = rng.Chance(50);
+            level.start = level.ordered ? 1 + static_cast<int>(rng.Below(3)) : 1;
+            claimed = ladder->emplace(where.listLevel, level).first;
+        }
+        list.ordered = claimed->second.ordered;
+        list.start = claimed->second.start;
         const std::size_t items = 1 + rng.Below(4);
         // A single-item list cannot be loose: with one block in one item there
         // is nowhere to put the blank line that would make it so.
@@ -295,8 +316,8 @@ Block MakeBlock(Rng& rng, int depth, Where where) {
             // rather than something to assert away here.
             const std::size_t blocks = 1;
             item.blocks = MakeBlocks(rng, depth + 1, blocks,
-                                     Where{/*insideItem=*/true, where.insideQuote,
-                                           list.ordered});
+                                     Where{/*insideItem=*/true, where.insideQuote, ladder,
+                                           where.listLevel + 1});
             list.items.push_back(std::move(item));
         }
         return Block::Of(std::move(list));
@@ -654,7 +675,47 @@ std::string FirstDifference(const std::string& before, const std::string& after)
 // belongs, and this is where the shapes readers produce belong.
 constexpr std::uint64_t kSeeds = 200;
 
+// The two shapes the generator used to be forbidden to produce, counted so the
+// round trips below cannot quietly stop exercising them. A generator restriction
+// removed in the writer but left in place here would look exactly like a passing
+// test.
+struct NestedShapes {
+    int differentKind = 0;  // a numbered list inside a bulleted one, or vice versa
+    int ownStart = 0;       // a sub-list beginning at something other than 1
+};
+
+void CountNested(const Blocks& blocks, const ListBlock* parent, NestedShapes& into);
+
+void CountNestedInList(const ListBlock& list, const ListBlock* parent, NestedShapes& into) {
+    if (parent != nullptr) {
+        if (list.ordered != parent->ordered) ++into.differentKind;
+        if (list.start != 1) ++into.ownStart;
+    }
+    for (const ListItem& item : list.items) CountNested(item.blocks, &list, into);
+}
+
+void CountNested(const Blocks& blocks, const ListBlock* parent, NestedShapes& into) {
+    for (const Block& block : blocks) {
+        if (const auto* list = block.As<ListBlock>()) {
+            CountNestedInList(*list, parent, into);
+        } else if (const auto* quote = block.As<BlockQuote>()) {
+            CountNested(quote->blocks, nullptr, into);
+        }
+    }
+}
+
 }  // namespace
+
+TEST_CASE("The seed span reaches the nested lists that used to be excluded",
+          "[property][docx]") {
+    NestedShapes shapes;
+    for (std::uint64_t seed = 1; seed <= kSeeds; ++seed) {
+        CountNested(MakeDocument(seed).blocks, nullptr, shapes);
+    }
+    INFO("different kind: " << shapes.differentKind << ", own start: " << shapes.ownStart);
+    CHECK(shapes.differentKind > 0);
+    CHECK(shapes.ownStart > 0);
+}
 
 TEST_CASE("A document survives a DOCX round trip", "[property][docx]") {
     for (std::uint64_t seed = 1; seed <= kSeeds; ++seed) {
