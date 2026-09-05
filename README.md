@@ -38,7 +38,8 @@ Pre-M0. What exists today:
 | IR round-trip property tests (§16) | Implemented |
 | Fuzz targets and the hostile-input corpus (§15, §16) | Implemented |
 | Performance budgets, measured (§17) | Implemented, one budget missed |
-| `Morph.App.exe` — the four screens of §12.2, without the window | Implemented, XAML shell not started |
+| `Morph.App.exe` — four screens as a state machine (§12.2) | Implemented, tested without a window |
+| `Morph.App.exe` — the WinUI 3 shell (§12.1) | Drop zone and target picker; off by default |
 
 439 tests green (`ctest --preset x64-debug`), including one that starts the
 broker, lets it start a worker, and converts a real file over the real pipe. The
@@ -102,6 +103,32 @@ DOCX scope is held to §8.4's P1 (paragraphs, runs, headings, character
 formatting, hyperlinks, images) and P2 (lists, tables). P3 (footnotes,
 headers/footers, section properties) and P4 (tracked changes, comments) are
 deliberately not implemented.
+
+The app is split the way the shell extension is. Its four screens (§12.2) are a
+state machine in `morph.app.core` that does no IO at all -- probing is injected,
+the broker's answers arrive as arguments -- so what the app DECIDES is tested in
+a console process with no window, no broker and no provider loaded. §12.3's
+escape hatch survives that: a C# rewrite of the shell would reimplement this
+library's callers, not its rules.
+
+**WinUI 3 builds here through CMake and Ninja, with no MSBuild and no .vcxproj.**
+That is worth stating because the received wisdom is that it cannot. WinUI's XAML
+compiler is an MSBuild task, but it is only needed for XAML MARKUP -- a UI built
+in code needs the C++/WinRT projection and nothing else, and CMake runs
+`cppwinrt.exe` over the SDK's `.winmd` files like any other code generator
+([`winappsdk.cmake`](src/app/winappsdk.cmake)). The cost is no designer and no
+XAML hot reload, both of which §12.3 had already written off; the gain is that
+§18's rule holds -- CI still drives the same script a developer does.
+
+`Morph.App.exe` is `OFF` by default (`-DMORPH_BUILD_APP=ON`), because the Windows
+App SDK is currently read out of the local NuGet cache rather than fetched by a
+pinned, checksummed script the way PDFium is. That script, and the SDK's entry in
+§14's licence matrix, belong with the packaging milestone that has to write the
+same versions into the MSIX manifest anyway. What exists today is the shell:
+a Mica window with the tall extended title bar §12.1 specifies, the whole of it a
+drop target, which probes what is dropped and shows the targets the broker says
+those files can reach. The queue and done screens are modelled and tested but not
+yet drawn.
 
 ## Trying it
 
