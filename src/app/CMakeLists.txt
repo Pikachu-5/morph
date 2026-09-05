@@ -126,14 +126,35 @@ configure_file(
     "${CMAKE_BINARY_DIR}/packaging/msix/AppxManifest.xml"
     @ONLY)
 
-add_custom_command(TARGET morph_app POST_BUILD
+# The manifest is staged by a command that DEPENDS on it rather than by a
+# POST_BUILD step on morph_app, and the difference is not cosmetic: POST_BUILD
+# runs only when the executable relinks, so editing the template regenerated the
+# file in the build tree and left the registered layout holding the old one.
+# What that looks like is a deployment error on a line number that does not
+# match anything you can see in the file you just fixed.
+#
+# CMAKE_RUNTIME_OUTPUT_DIRECTORY rather than $<TARGET_FILE_DIR:morph_app>
+# because this is a custom target's DEPENDS and the two are the same directory
+# here (one configuration, set once in the root list).
+set(MORPH_STAGED_MANIFEST "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/AppxManifest.xml")
+add_custom_command(
+    OUTPUT "${MORPH_STAGED_MANIFEST}"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_BINARY_DIR}/AppxManifest.dev.xml"
-            "$<TARGET_FILE_DIR:morph_app>/AppxManifest.xml"
+            "${MORPH_STAGED_MANIFEST}"
+    DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/AppxManifest.dev.xml"
+    COMMENT "Staging the development manifest for Morph.App"
+    VERBATIM)
+add_custom_target(morph_app_manifest DEPENDS "${MORPH_STAGED_MANIFEST}")
+add_dependencies(morph_app morph_app_manifest)
+
+# The assets are a directory copy, which is cheap and unconditional, so a
+# POST_BUILD step is the right shape for them.
+add_custom_command(TARGET morph_app POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${PROJECT_SOURCE_DIR}/packaging/msix/Assets"
             "$<TARGET_FILE_DIR:morph_app>/Assets"
-    COMMENT "Staging the development package layout for Morph.App")
+    COMMENT "Staging the package assets for Morph.App")
 
 # The manifest names morph.shellext.dll, and a registered package whose class
 # points at a DLL that is not there is a verb that fails to activate. Every

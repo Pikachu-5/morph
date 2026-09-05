@@ -35,6 +35,7 @@ add_executable(morph_tests
     unit/test_broker_scheduling.cpp
     property/test_ir_roundtrip.cpp
     integration/test_broker_end_to_end.cpp
+    integration/test_shellext_registered.cpp
 )
 
 add_subdirectory(fuzz)
