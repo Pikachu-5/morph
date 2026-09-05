@@ -14,6 +14,10 @@
 #include <vector>
 
 #include "morph/core/ipc/protocol.h"
+// ApplyTemplate used to live here. It moved to the core when the app grew a
+// preview of the name a template produces: the broker decides the real one and
+// the app predicts it, and two implementations of that would drift silently.
+#include "morph/core/naming.h"
 
 namespace morph::broker {
 
@@ -39,12 +43,5 @@ struct OutputPlan {
                                        const std::string& targetProfile,
                                        const ipc::OutputPolicy& policy, std::size_t index,
                                        std::vector<std::filesystem::path>& taken);
-
-// "{name}.{ext}" with {name}, {ext}, {index} and {target} substituted. Exposed
-// for the tests, and because a template with an unknown placeholder in it is
-// worth being able to check without touching the filesystem.
-[[nodiscard]] std::string ApplyTemplate(std::string_view namingTemplate, std::string_view name,
-                                        std::string_view extension, std::size_t index,
-                                        std::string_view target);
 
 }  // namespace morph::broker

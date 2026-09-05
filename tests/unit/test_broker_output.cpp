@@ -189,3 +189,62 @@ TEST_CASE("A template cannot produce a name Windows would rewrite", "[broker][ou
     REQUIRE(plan.error.empty());
     CHECK(plan.path.filename() == "notes.pdf");
 }
+
+// --- The template warning (section 10.2) -------------------------------------
+//
+// NamingTemplateWarning is advice, not validation: every string below is a legal
+// template that ResolveOutput will happily resolve. The tests are about which of
+// them a person should be told about before the batch runs, not about which are
+// allowed.
+
+TEST_CASE("A sound template has nothing to warn about", "[output][naming]") {
+    CHECK(NamingTemplateWarning("{name}.{ext}").empty());
+    CHECK(NamingTemplateWarning("{index}-{name}.{ext}").empty());
+    CHECK(NamingTemplateWarning("{name}-{target}.{ext}").empty());
+    // Empty means "use the default", which is the soundest template there is.
+    CHECK(NamingTemplateWarning("").empty());
+}
+
+TEST_CASE("A template that names every file the same is the warning that matters",
+          "[output][naming]") {
+    // The failure this exists for: legal, silent, and it turns a folder of two
+    // hundred photographs into one file and a hundred and ninety nine renames.
+    const std::string warning = NamingTemplateWarning("converted.{ext}");
+    REQUIRE_FALSE(warning.empty());
+    CHECK(warning.find("{name}") != std::string::npos);
+    CHECK(warning.find("{index}") != std::string::npos);
+
+    // {index} alone is enough to make them distinct, so it is not warned about.
+    CHECK(NamingTemplateWarning("converted-{index}.{ext}").empty());
+}
+
+TEST_CASE("A template with no extension is worth mentioning", "[output][naming]") {
+    const std::string warning = NamingTemplateWarning("{name}");
+    REQUIRE_FALSE(warning.empty());
+    CHECK(warning.find("{ext}") != std::string::npos);
+}
+
+TEST_CASE("A misspelled placeholder is reported with the spelling used",
+          "[output][naming]") {
+    const std::string warning = NamingTemplateWarning("{name}.{etx}");
+    REQUIRE_FALSE(warning.empty());
+    CHECK(warning.find("{etx}") != std::string::npos);
+}
+
+TEST_CASE("An unclosed brace says so rather than being silently accepted",
+          "[output][naming]") {
+    CHECK_FALSE(NamingTemplateWarning("{name}.{ext").empty());
+}
+
+TEST_CASE("The warning agrees with what ApplyTemplate actually does",
+          "[output][naming]") {
+    // The point of the pair: a warned-about template produces the collision it
+    // was warned about, and a clean one does not. Anything else would mean the
+    // advice and the resolver disagree.
+    CHECK(ApplyTemplate("converted.{ext}", "a", "png", 0, "image/png") ==
+          ApplyTemplate("converted.{ext}", "b", "png", 1, "image/png"));
+    CHECK(ApplyTemplate("{name}.{ext}", "a", "png", 0, "image/png") !=
+          ApplyTemplate("{name}.{ext}", "b", "png", 1, "image/png"));
+    CHECK(ApplyTemplate("{index}.{ext}", "a", "png", 0, "image/png") !=
+          ApplyTemplate("{index}.{ext}", "b", "png", 1, "image/png"));
+}

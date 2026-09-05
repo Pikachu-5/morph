@@ -4,6 +4,7 @@
 #include <system_error>
 
 #include "morph/core/extensions.h"
+#include "morph/core/naming.h"
 #include "morph/core/path_safety.h"
 
 namespace morph::broker {
@@ -19,44 +20,6 @@ namespace {
 std::string Sanitised(std::string_view text) { return io::SafeComponent(text); }
 
 }  // namespace
-
-std::string ApplyTemplate(std::string_view namingTemplate, std::string_view name,
-                          std::string_view extension, std::size_t index,
-                          std::string_view target) {
-    std::string out;
-    out.reserve(namingTemplate.size() + name.size() + extension.size());
-
-    for (std::size_t i = 0; i < namingTemplate.size();) {
-        if (namingTemplate[i] != '{') {
-            out.push_back(namingTemplate[i++]);
-            continue;
-        }
-        const std::size_t close = namingTemplate.find('}', i);
-        if (close == std::string_view::npos) {
-            // An unterminated placeholder is a typo in a preference, not an
-            // attack. Copy it through so the user sees their mistake in the
-            // filename rather than losing the rest of the template.
-            out.append(namingTemplate.substr(i));
-            break;
-        }
-
-        const std::string_view key = namingTemplate.substr(i + 1, close - i - 1);
-        if (key == "name") {
-            out.append(name);
-        } else if (key == "ext") {
-            out.append(extension);
-        } else if (key == "index") {
-            out.append(std::to_string(index));
-        } else if (key == "target") {
-            out.append(Sanitised(target));
-        } else {
-            // Same reasoning: an unknown placeholder is left visible.
-            out.append(namingTemplate.substr(i, close - i + 1));
-        }
-        i = close + 1;
-    }
-    return out;
-}
 
 OutputPlan ResolveOutput(const std::filesystem::path& input, const std::string& targetProfile,
                          const ipc::OutputPolicy& policy, std::size_t index,
@@ -80,7 +43,8 @@ OutputPlan ResolveOutput(const std::filesystem::path& input, const std::string& 
     // assembled name, because the template chooses the final spelling and is the
     // only thing that knows whether "nul" ended up in front of a dot.
     const std::string name = Sanitised(
-        ApplyTemplate(policy.namingTemplate.empty() ? "{name}.{ext}" : policy.namingTemplate,
+        ApplyTemplate(policy.namingTemplate.empty() ? kDefaultNamingTemplate
+                                                    : std::string_view(policy.namingTemplate),
                       Sanitised(input.stem().string()), extension, index, targetProfile));
     if (name.empty()) {
         plan.error = "The naming template produced an empty file name.";

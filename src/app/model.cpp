@@ -5,6 +5,7 @@
 #include <filesystem>
 
 #include "morph/core/extensions.h"
+#include "morph/core/naming.h"
 #include "morph/core/media_profile.h"
 
 namespace morph::app {
@@ -102,6 +103,39 @@ std::size_t AppModel::Drop(const std::vector<std::string>& paths) {
     // reasons, rather than on a picker with nothing on it.
     if (usable > 0) screen_ = Screen::kTargetPicker;
     return usable;
+}
+
+AppModel::OutputPreview AppModel::PreviewOutput(std::string_view targetProfile) const {
+    OutputPreview preview;
+    preview.warning = NamingTemplateWarning(output_.namingTemplate);
+
+    const auto first = std::find_if(inputs_.begin(), inputs_.end(),
+                                    [](const InputFile& file) { return file.usable(); });
+    if (first == inputs_.end()) return preview;
+
+    const std::string_view extension = ExtensionFor(targetProfile);
+    if (extension.empty()) return preview;
+
+    const std::filesystem::path input(first->path);
+    // Index 0 rather than the file's position: this is the FIRST usable file,
+    // and showing "{index}" resolved to anything else would be a preview of a
+    // line the user is not looking at.
+    const std::string name = ApplyTemplate(output_.namingTemplate.empty()
+                                               ? kDefaultNamingTemplate
+                                               : std::string_view(output_.namingTemplate),
+                                           input.stem().string(), extension, 0, targetProfile);
+
+    // An empty directory means beside the input, which is the default and what
+    // the shell extension always does.
+    const std::filesystem::path directory =
+        output_.directory.empty() ? input.parent_path() : std::filesystem::path(output_.directory);
+
+    // Deliberately NOT the collision-resolved name. Whether "report.pdf" becomes
+    // "report (1).pdf" depends on what is on disk at the moment the batch runs,
+    // and a preview that promised one and delivered the other would be worse
+    // than one that shows the name being asked for.
+    preview.example = input.filename().string() + "  \xe2\x86\x92  " + (directory / name).string();
+    return preview;
 }
 
 ipc::QueryTargets AppModel::TargetQuery() const {

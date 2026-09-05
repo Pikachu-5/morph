@@ -132,6 +132,24 @@ public:
     [[nodiscard]] ipc::OutputPolicy& output() noexcept { return output_; }
     [[nodiscard]] const ipc::OutputPolicy& output() const noexcept { return output_; }
 
+    // What the current policy will do to the current selection, in one line.
+    //
+    // §10.2 calls the output policy "the part users get wrong and support
+    // questions are about", and the reason it is easy to get wrong is that
+    // nothing shows you the answer until the files already exist. This is that
+    // answer, computed from the same ApplyTemplate the broker resolves with, so
+    // a preview cannot disagree with the result.
+    struct OutputPreview {
+        // "holiday.jpg  ->  C:\\Pictures\\holiday.png". Empty when there is
+        // nothing selected yet to be an example of.
+        std::string example;
+        // The one thing worth saying about this template, or empty. A template
+        // with neither {name} nor {index} gives every file in the batch the
+        // same name, which is legal, silent, and almost never meant.
+        std::string warning;
+    };
+    [[nodiscard]] OutputPreview PreviewOutput(std::string_view targetProfile) const;
+
     // --- The drop zone -------------------------------------------------------
 
     // "The entire window is a drop target. On drop, probe the files and move

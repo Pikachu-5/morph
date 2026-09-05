@@ -12,6 +12,7 @@ add_library(morph_core STATIC
     src/graph/extensions.cpp
     src/io/stream.cpp
     src/io/path_safety.cpp
+    src/io/naming.cpp
     src/io/options.cpp
     src/io/provider.cpp
     src/io/temp_store.cpp

@@ -62,6 +62,7 @@
 
 #include "app/client.h"
 #include "app/model.h"
+#include "morph/core/naming.h"
 #include "morph/core/stream.h"
 #include "providers.h"
 
@@ -417,6 +418,94 @@ private:
         RefreshTitleBar();
     }
 
+    // --- Output policy handlers ----------------------------------------------
+
+    // The preview is recomputed from the model rather than assembled here, so
+    // that the line on screen and the name the broker resolves come from one
+    // ApplyTemplate. See morph/core/naming.h for why that is not the broker's.
+    void RefreshOutputPanel() {
+        if (!outputPanel_) return;
+
+        const ipc::OutputPolicy& policy = model_->output();
+        destinationText_.Text(policy.directory.empty() ? L"Beside each original file"
+                                                       : Widen(policy.directory));
+        besideEachFile_.IsEnabled(!policy.directory.empty());
+
+        // The example is the FIRST target offered, which is the best-fidelity
+        // one under the first family heading. Any target would do -- the only
+        // thing that changes between them is the extension -- and picking one
+        // beats a line with "{ext}" still in it, which is the thing the user is
+        // trying to find out the meaning of.
+        const auto& targets = model_->targets();
+        if (targets.empty()) {
+            outputPanel_.Visibility(xaml::Visibility::Collapsed);
+            return;
+        }
+        outputPanel_.Visibility(xaml::Visibility::Visible);
+
+        const auto preview = model_->PreviewOutput(targets.front().profile);
+        previewText_.Text(preview.example.empty()
+                              ? L""
+                              : Widen("Saves as   " + preview.example));
+        warningText_.Text(Widen(preview.warning));
+        warningText_.Visibility(preview.warning.empty() ? xaml::Visibility::Collapsed
+                                                        : xaml::Visibility::Visible);
+    }
+
+    void OnTemplateChanged(foundation::IInspectable const&,
+                           controls::TextChangedEventArgs const&) {
+        // Straight through on every keystroke, including the empty string --
+        // which the policy already defines as "use the default" rather than as
+        // an error, so there is nothing to reject and nothing to fight the user
+        // about mid-word.
+        model_->output().namingTemplate = Narrow(templateBox_.Text());
+        RefreshOutputPanel();
+    }
+
+    void OnOverwriteChanged(foundation::IInspectable const&,
+                            controls::SelectionChangedEventArgs const&) {
+        const std::int32_t index = overwriteBox_.SelectedIndex();
+        if (index < 0) return;
+        model_->output().overwrite = static_cast<ipc::OverwriteRule>(index);
+        RefreshOutputPanel();
+    }
+
+    void OnBesideEachFile(foundation::IInspectable const&, xaml::RoutedEventArgs const&) {
+        model_->output().directory.clear();
+        RefreshOutputPanel();
+    }
+
+    // IFileDialog rather than the WinRT FolderPicker: the WinRT one needs an
+    // IInitializeWithWindow cast to work outside a UWP process at all, and this
+    // process already has the HWND and the COM apartment for the shell dialog.
+    // One dependency fewer for the same dialog.
+    void OnChooseFolder(foundation::IInspectable const&, xaml::RoutedEventArgs const&) {
+        winrt::com_ptr<::IFileOpenDialog> dialog;
+        if (FAILED(::CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                      IID_PPV_ARGS(dialog.put())))) {
+            return;
+        }
+
+        DWORD options = 0;
+        if (SUCCEEDED(dialog->GetOptions(&options))) {
+            (void)dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM |
+                                     FOS_PATHMUSTEXIST);
+        }
+        (void)dialog->SetTitle(L"Where should the converted files go?");
+
+        if (dialog->Show(hwnd_) != S_OK) return;  // cancelled, which is not a failure
+
+        winrt::com_ptr<::IShellItem> item;
+        if (FAILED(dialog->GetResult(item.put()))) return;
+
+        LPWSTR path = nullptr;
+        if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)) && path != nullptr) {
+            model_->output().directory = Narrow(path);
+            ::CoTaskMemFree(path);
+        }
+        RefreshOutputPanel();
+    }
+
     // Both, always. The window title is what the taskbar and alt-tab show; the
     // TextBlock is what the user is actually looking at. Section 12.2 asks for
     // progress "in the title bar", and with the content extended into it those
@@ -450,6 +539,8 @@ private:
         groups_.Spacing(16);
         groups_.HorizontalAlignment(xaml::HorizontalAlignment::Center);
 
+        BuildOutputPanel();
+
         chooser_ = controls::StackPanel{};
         chooser_.Spacing(14);
         chooser_.VerticalAlignment(xaml::VerticalAlignment::Center);
@@ -457,6 +548,119 @@ private:
         chooser_.Children().Append(heading_);
         chooser_.Children().Append(subheading_);
         chooser_.Children().Append(groups_);
+        chooser_.Children().Append(outputPanel_);
+    }
+
+    // --- The output policy (section 10.2, section 12.2) ----------------------
+    //
+    // §10.2 calls this "the part users get wrong and support questions are
+    // about". The reason it is easy to get wrong is that nothing shows you the
+    // answer until the files already exist, so the panel is built around the
+    // preview line rather than around the three controls: the controls are how
+    // you change it, the line is what you are changing.
+    //
+    // The line is ALWAYS visible and the controls are behind an Expander,
+    // because §12.2 says the target picker "is the product" and three settings
+    // nobody is currently changing should not out-weigh it. Where the files go
+    // is worth a sentence on screen at all times; how to alter that is worth a
+    // disclosure triangle.
+    void BuildOutputPanel() {
+        previewText_ = controls::TextBlock{};
+        previewText_.Opacity(0.7);
+        previewText_.FontSize(12);
+        previewText_.TextWrapping(xaml::TextWrapping::Wrap);
+        previewText_.HorizontalAlignment(xaml::HorizontalAlignment::Center);
+        previewText_.TextAlignment(xaml::TextAlignment::Center);
+
+        warningText_ = controls::TextBlock{};
+        warningText_.FontSize(12);
+        warningText_.TextWrapping(xaml::TextWrapping::Wrap);
+        warningText_.HorizontalAlignment(xaml::HorizontalAlignment::Center);
+        warningText_.TextAlignment(xaml::TextAlignment::Center);
+        warningText_.Foreground(
+            xaml::Media::SolidColorBrush{winrt::Windows::UI::ColorHelper::FromArgb(255, 255, 185, 0)});
+        warningText_.Visibility(xaml::Visibility::Collapsed);
+
+        destinationText_ = controls::TextBlock{};
+        destinationText_.VerticalAlignment(xaml::VerticalAlignment::Center);
+        destinationText_.TextTrimming(xaml::TextTrimming::CharacterEllipsis);
+        destinationText_.MaxWidth(280);
+
+        chooseFolder_ = controls::Button{};
+        chooseFolder_.Content(winrt::box_value(L"Choose folder…"));
+        chooseFolder_.Click({this, &Shell::OnChooseFolder});
+
+        besideEachFile_ = controls::Button{};
+        besideEachFile_.Content(winrt::box_value(L"Beside each file"));
+        besideEachFile_.Click({this, &Shell::OnBesideEachFile});
+
+        controls::StackPanel destinationRow;
+        destinationRow.Orientation(controls::Orientation::Horizontal);
+        destinationRow.Spacing(8);
+        destinationRow.Children().Append(chooseFolder_);
+        destinationRow.Children().Append(besideEachFile_);
+        destinationRow.Children().Append(destinationText_);
+
+        templateBox_ = controls::TextBox{};
+        templateBox_.Text(Widen(std::string(kDefaultNamingTemplate)));
+        templateBox_.Width(260);
+        templateBox_.TextChanged({this, &Shell::OnTemplateChanged});
+        xaml::Automation::AutomationProperties::SetName(templateBox_, L"File name template");
+
+        controls::TextBlock templateHelp;
+        templateHelp.Text(L"{name} {ext} {index} {target}");
+        templateHelp.Opacity(0.55);
+        templateHelp.FontSize(11);
+        templateHelp.VerticalAlignment(xaml::VerticalAlignment::Center);
+
+        controls::StackPanel templateRow;
+        templateRow.Orientation(controls::Orientation::Horizontal);
+        templateRow.Spacing(8);
+        templateRow.Children().Append(templateBox_);
+        templateRow.Children().Append(templateHelp);
+
+        overwriteBox_ = controls::ComboBox{};
+        // Order matters: it is the OverwriteRule enum's order, so the selected
+        // index IS the rule and there is no mapping table to get wrong.
+        for (const auto* text : {L"Rename (keep both)", L"Skip", L"Replace"}) {
+            overwriteBox_.Items().Append(winrt::box_value(text));
+        }
+        overwriteBox_.SelectedIndex(static_cast<std::int32_t>(ipc::OverwriteRule::kRename));
+        overwriteBox_.SelectionChanged({this, &Shell::OnOverwriteChanged});
+        xaml::Automation::AutomationProperties::SetName(overwriteBox_,
+                                                        L"When the file already exists");
+
+        controls::StackPanel fields;
+        fields.Spacing(10);
+        fields.Children().Append(Labelled(L"Save to", destinationRow));
+        fields.Children().Append(Labelled(L"Name", templateRow));
+        fields.Children().Append(Labelled(L"If it exists", overwriteBox_));
+
+        controls::Expander expander;
+        expander.Header(winrt::box_value(L"Output options"));
+        expander.Content(fields);
+        expander.HorizontalAlignment(xaml::HorizontalAlignment::Center);
+
+        outputPanel_ = controls::StackPanel{};
+        outputPanel_.Spacing(6);
+        outputPanel_.Margin(xaml::ThicknessHelper::FromLengths(0, 8, 0, 0));
+        outputPanel_.Children().Append(previewText_);
+        outputPanel_.Children().Append(warningText_);
+        outputPanel_.Children().Append(expander);
+    }
+
+    [[nodiscard]] static controls::StackPanel Labelled(std::wstring_view text,
+                                                       xaml::UIElement const& content) {
+        controls::TextBlock label;
+        label.Text(text);
+        label.Opacity(0.6);
+        label.FontSize(12);
+
+        controls::StackPanel row;
+        row.Spacing(4);
+        row.Children().Append(label);
+        row.Children().Append(content);
+        return row;
     }
 
     void BuildQueue() {
@@ -587,6 +791,7 @@ private:
             }
             row.Children().Append(TargetEntry(choice));
         }
+        RefreshOutputPanel();
     }
 
     // One target: the button that chooses it, and under it the badge that
@@ -921,6 +1126,15 @@ private:
     controls::TextBlock heading_{nullptr};
     controls::TextBlock subheading_{nullptr};
     controls::StackPanel groups_{nullptr};
+
+    controls::StackPanel outputPanel_{nullptr};
+    controls::TextBlock previewText_{nullptr};
+    controls::TextBlock warningText_{nullptr};
+    controls::TextBlock destinationText_{nullptr};
+    controls::Button chooseFolder_{nullptr};
+    controls::Button besideEachFile_{nullptr};
+    controls::TextBox templateBox_{nullptr};
+    controls::ComboBox overwriteBox_{nullptr};
 
     controls::Grid queue_{nullptr};
     controls::TextBlock queueHeading_{nullptr};

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "app/model.h"
+#include "morph/core/naming.h"
 
 using namespace morph;
 using namespace morph::app;
@@ -378,4 +379,94 @@ TEST_CASE("dropping onto the done screen starts a new selection", "[app][model]"
     REQUIRE(model.inputs().size() == 1);
     CHECK(model.inputs()[0].path == R"(C:\c.png)");
     CHECK(model.rows().empty());
+}
+
+// --- The output preview (section 10.2, section 12.2's B3 panel) --------------
+//
+// §10.2 calls the output policy "the part users get wrong and support questions
+// are about", and the reason is that nothing shows the answer until the files
+// exist. These are about that answer being right BEFORE they do.
+
+TEST_CASE("The preview shows where the first file will land", "[app][output]") {
+    AppModel model(TableProber());
+    model.Drop({R"(C:\notes\report.md)"});
+
+    const auto preview = model.PreviewOutput("application/pdf");
+    CHECK(preview.warning.empty());
+    // Beside the input by default, stem kept, extension from the target.
+    CHECK(preview.example.find("report.md") != std::string::npos);
+    CHECK(preview.example.find(R"(C:\notes\report.pdf)") != std::string::npos);
+}
+
+TEST_CASE("A destination folder moves the preview with it", "[app][output]") {
+    AppModel model(TableProber());
+    model.Drop({R"(C:\notes\report.md)"});
+    model.output().directory = R"(D:\Converted)";
+
+    const auto preview = model.PreviewOutput("application/pdf");
+    CHECK(preview.example.find(R"(D:\Converted\report.pdf)") != std::string::npos);
+    // The source is still named, because the line is about the mapping and a
+    // destination on its own does not say which file it is for.
+    CHECK(preview.example.find("report.md") != std::string::npos);
+}
+
+TEST_CASE("The preview uses the template the user typed", "[app][output]") {
+    AppModel model(TableProber());
+    model.Drop({R"(C:\notes\report.md)"});
+    model.output().namingTemplate = "{index}-{name}-converted.{ext}";
+
+    const auto preview = model.PreviewOutput("application/pdf");
+    CHECK(preview.example.find("0-report-converted.pdf") != std::string::npos);
+    CHECK(preview.warning.empty());
+}
+
+TEST_CASE("The preview carries the same warning the core gives", "[app][output]") {
+    AppModel model(TableProber());
+    model.Drop({R"(C:\notes\report.md)"});
+    model.output().namingTemplate = "everything.{ext}";
+
+    const auto preview = model.PreviewOutput("application/pdf");
+    CHECK(preview.warning == NamingTemplateWarning("everything.{ext}"));
+    REQUIRE_FALSE(preview.warning.empty());
+    // The line still resolves, because the template is legal -- it is the
+    // sameness across files that is the problem, and one line cannot show it.
+    CHECK(preview.example.find("everything.pdf") != std::string::npos);
+}
+
+TEST_CASE("A preview of a target Morph cannot write is not invented",
+          "[app][output]") {
+    AppModel model(TableProber());
+    model.Drop({R"(C:\notes\report.md)"});
+
+    // No extension in the table means nothing can be predicted, and a guessed
+    // one would be a filename the broker never produces.
+    CHECK(model.PreviewOutput("application/morph-ir").example.empty());
+}
+
+TEST_CASE("With nothing usable dropped there is nothing to preview",
+          "[app][output]") {
+    AppModel model(TableProber());
+    CHECK(model.PreviewOutput("application/pdf").example.empty());
+
+    model.Drop({R"(C:\notes\thing.xyz)"});
+    CHECK(model.PreviewOutput("application/pdf").example.empty());
+    // The unusable file does not become the example just because it is first.
+    model.Drop({R"(C:\notes\report.md)"});
+    CHECK(model.PreviewOutput("application/pdf").example.find("report") != std::string::npos);
+}
+
+TEST_CASE("Convert more keeps the output policy", "[app][output]") {
+    AppModel model(TableProber());
+    model.output().directory = R"(D:\Converted)";
+    model.output().namingTemplate = "{name}-v2.{ext}";
+    model.output().overwrite = ipc::OverwriteRule::kSkip;
+
+    model.Drop({R"(C:\notes\report.md)"});
+    model.ConvertMore();
+
+    // Section 12.2's reason: they set it for a purpose and being made to set it
+    // again after every batch is what makes a tool annoying.
+    CHECK(model.output().directory == R"(D:\Converted)");
+    CHECK(model.output().namingTemplate == "{name}-v2.{ext}");
+    CHECK(model.output().overwrite == ipc::OverwriteRule::kSkip);
 }
