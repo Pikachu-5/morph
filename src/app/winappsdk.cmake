@@ -30,31 +30,81 @@
 # problem rather than the build's; see the note above `struct App` there, which
 # is the single hardest-won paragraph in this directory.
 #
-# THE PACKAGES ARE NOT PINNED YET, and that is the one loose end. They are read
-# from the local NuGet cache, which means this builds on a machine that has
-# opened a WinUI project before and nowhere else -- which is why
-# MORPH_BUILD_APP defaults to OFF. The fix is the shape tools/fetch-pdfium.ps1
-# already has: a pinned version, a SHA-256, and a download that fails loudly.
-# That belongs with the packaging milestone, where the same versions have to be
-# written into the MSIX manifest anyway.
+# THE PACKAGES ARE PINNED, in third_party/winappsdk-packages.txt: a version and
+# a SHA-256 per package, the shape tools/fetch-pdfium.ps1 already had.
+# tools/fetch-winappsdk.ps1 downloads and verifies them into
+# third_party/winappsdk, tools/scan-licenses.ps1 checks their licences, and this
+# file reads the same manifest to find them. Three copies of five version
+# numbers is how a build ends up linking one release of the SDK against the
+# metadata of another, which does not fail at the link -- it fails at run time,
+# with a type that does not activate.
+#
+# The local NuGet cache is still searched, second. A developer who has opened a
+# WinUI project already has these packages, and making them download 90 MB they
+# have on disk would be a worse first build, not a better one. The pin decides
+# WHICH version is used either way; the roots only decide where it is found.
 
-set(MORPH_NUGET_PACKAGES "$ENV{USERPROFILE}/.nuget/packages"
-    CACHE PATH "Where the Windows App SDK NuGet packages are unpacked")
+set(MORPH_WINAPPSDK_MANIFEST "${PROJECT_SOURCE_DIR}/third_party/winappsdk-packages.txt"
+    CACHE FILEPATH "The pinned Windows App SDK package list")
 
-# Read together with the versions the runtime bootstrapper will be asked for in
-# main.cpp. The SDK splits into sub-packages that version independently, which is
-# why there are four numbers here rather than one.
-set(MORPH_WINAPPSDK_WINUI_VERSION       "1.8.260204000" CACHE STRING "Microsoft.WindowsAppSDK.WinUI")
-set(MORPH_WINAPPSDK_FOUNDATION_VERSION  "1.8.260203002" CACHE STRING "Microsoft.WindowsAppSDK.Foundation")
-set(MORPH_WINAPPSDK_INTERACTIVE_VERSION "1.8.260125001" CACHE STRING "Microsoft.WindowsAppSDK.InteractiveExperiences")
+set(MORPH_WINAPPSDK_ROOTS
+    "${PROJECT_SOURCE_DIR}/third_party/winappsdk"
+    "$ENV{USERPROFILE}/.nuget/packages"
+    CACHE STRING "Directories searched for the pinned packages, in order")
 
 # The runtime the bootstrapper asks for, as the packed major/minor the API takes:
-# 0x00010008 is 1.8, 0x00020000 is 2.0. It must match the line the versions above
-# come from, because the headers, the .winmd files and the framework package the
-# process resolves at run time all have to be one release of one product.
+# 0x00010008 is 1.8, 0x00020000 is 2.0. It must match the release the manifest's
+# versions come from, because the headers, the .winmd files and the framework
+# package the process resolves at run time all have to be one release of one
+# product. It is here rather than in the manifest because it is a property of the
+# release as a whole and not of any one package in it.
 set(MORPH_WINAPPSDK_MAJORMINOR "0x00010008" CACHE STRING "Windows App Runtime major.minor, packed")
-set(MORPH_CPPWINRT_VERSION              "2.0.250303.1"  CACHE STRING "Microsoft.Windows.CppWinRT")
-set(MORPH_WEBVIEW2_NUGET_VERSION        "1.0.3719.77"   CACHE STRING "Microsoft.Web.WebView2")
+
+# Reads the manifest and sets, per package, MORPH_PKG_<ID> to the directory it
+# was found in and MORPH_VER_<ID> to its pinned version -- with the id
+# upper-cased and its dots turned into underscores. Not a function: the callers
+# below want these at directory scope, and a function would need a PARENT_SCOPE
+# for each of ten variables whose names it computes.
+if(NOT EXISTS "${MORPH_WINAPPSDK_MANIFEST}")
+    message(FATAL_ERROR "The Windows App SDK pin manifest is missing: ${MORPH_WINAPPSDK_MANIFEST}")
+endif()
+
+set(MORPH_WINAPPSDK_PINNED "")
+file(STRINGS "${MORPH_WINAPPSDK_MANIFEST}" _morph_manifest_lines)
+foreach(_line IN LISTS _morph_manifest_lines)
+    string(STRIP "${_line}" _line)
+    if(_line STREQUAL "" OR _line MATCHES "^#")
+        continue()
+    endif()
+    string(REPLACE "|" ";" _fields "${_line}")
+    list(LENGTH _fields _count)
+    if(NOT _count EQUAL 5)
+        message(FATAL_ERROR "Malformed line in ${MORPH_WINAPPSDK_MANIFEST}:\n  ${_line}")
+    endif()
+    list(GET _fields 0 _id)
+    list(GET _fields 1 _version)
+
+    string(TOUPPER "${_id}" _key)
+    string(REPLACE "." "_" _key "${_key}")
+    string(TOLOWER "${_id}" _lower)
+
+    set(MORPH_VER_${_key} "${_version}")
+    set(MORPH_PKG_${_key} "")
+    foreach(_root IN LISTS MORPH_WINAPPSDK_ROOTS)
+        if(EXISTS "${_root}/${_lower}/${_version}")
+            set(MORPH_PKG_${_key} "${_root}/${_lower}/${_version}")
+            break()
+        endif()
+    endforeach()
+    list(APPEND MORPH_WINAPPSDK_PINNED "${_id}")
+endforeach()
+
+# Named so the rest of the file reads the way it did before the manifest.
+set(_winui       "${MORPH_PKG_MICROSOFT_WINDOWSAPPSDK_WINUI}")
+set(_foundation  "${MORPH_PKG_MICROSOFT_WINDOWSAPPSDK_FOUNDATION}")
+set(_interactive "${MORPH_PKG_MICROSOFT_WINDOWSAPPSDK_INTERACTIVEEXPERIENCES}")
+set(_cppwinrt    "${MORPH_PKG_MICROSOFT_WINDOWS_CPPWINRT}")
+set(_webview2    "${MORPH_PKG_MICROSOFT_WEB_WEBVIEW2}")
 
 # Returns TRUE in `out` when every piece is present, and sets the paths used
 # below. Reports what is missing rather than failing, because MORPH_BUILD_APP is
@@ -62,31 +112,32 @@ set(MORPH_WEBVIEW2_NUGET_VERSION        "1.0.3719.77"   CACHE STRING "Microsoft.
 function(morph_find_winappsdk out)
     set(missing "")
 
-    set(winui       "${MORPH_NUGET_PACKAGES}/microsoft.windowsappsdk.winui/${MORPH_WINAPPSDK_WINUI_VERSION}")
-    set(foundation  "${MORPH_NUGET_PACKAGES}/microsoft.windowsappsdk.foundation/${MORPH_WINAPPSDK_FOUNDATION_VERSION}")
-    set(interactive "${MORPH_NUGET_PACKAGES}/microsoft.windowsappsdk.interactiveexperiences/${MORPH_WINAPPSDK_INTERACTIVE_VERSION}")
-    set(cppwinrt    "${MORPH_NUGET_PACKAGES}/microsoft.windows.cppwinrt/${MORPH_CPPWINRT_VERSION}/bin/cppwinrt.exe")
-    set(webview2md  "${MORPH_NUGET_PACKAGES}/microsoft.web.webview2/${MORPH_WEBVIEW2_NUGET_VERSION}/lib/Microsoft.Web.WebView2.Core.winmd")
+    set(winui       "${_winui}")
+    set(foundation  "${_foundation}")
+    set(interactive "${_interactive}")
+    set(cppwinrt    "${_cppwinrt}/bin/cppwinrt.exe")
+    set(webview2md  "${_webview2}/lib/Microsoft.Web.WebView2.Core.winmd")
 
-    if(NOT EXISTS "${cppwinrt}")
-        list(APPEND missing "Microsoft.Windows.CppWinRT ${MORPH_CPPWINRT_VERSION}")
+    if(_cppwinrt STREQUAL "" OR NOT EXISTS "${cppwinrt}")
+        list(APPEND missing "Microsoft.Windows.CppWinRT ${MORPH_VER_MICROSOFT_WINDOWS_CPPWINRT}")
     endif()
-    if(NOT EXISTS "${winui}/metadata")
-        list(APPEND missing "Microsoft.WindowsAppSDK.WinUI ${MORPH_WINAPPSDK_WINUI_VERSION}")
+    if(_winui STREQUAL "" OR NOT EXISTS "${winui}/metadata")
+        list(APPEND missing "Microsoft.WindowsAppSDK.WinUI ${MORPH_VER_MICROSOFT_WINDOWSAPPSDK_WINUI}")
     endif()
-    if(NOT EXISTS "${foundation}/include")
-        list(APPEND missing "Microsoft.WindowsAppSDK.Foundation ${MORPH_WINAPPSDK_FOUNDATION_VERSION}")
-    endif()
-    if(NOT EXISTS "${interactive}/metadata")
+    if(_foundation STREQUAL "" OR NOT EXISTS "${foundation}/include")
         list(APPEND missing
-             "Microsoft.WindowsAppSDK.InteractiveExperiences ${MORPH_WINAPPSDK_INTERACTIVE_VERSION}")
+             "Microsoft.WindowsAppSDK.Foundation ${MORPH_VER_MICROSOFT_WINDOWSAPPSDK_FOUNDATION}")
+    endif()
+    if(_interactive STREQUAL "" OR NOT EXISTS "${interactive}/metadata")
+        list(APPEND missing
+             "Microsoft.WindowsAppSDK.InteractiveExperiences ${MORPH_VER_MICROSOFT_WINDOWSAPPSDK_INTERACTIVEEXPERIENCES}")
     endif()
     # Microsoft.UI.Xaml.WebView2 wraps CoreWebView2, so the projection does not
     # close without WebView2's own metadata -- even though nothing in the app
     # uses it. vcpkg's webview2 port ships headers and no .winmd, so this one
     # comes from NuGet like the rest.
-    if(NOT EXISTS "${webview2md}")
-        list(APPEND missing "Microsoft.Web.WebView2 ${MORPH_WEBVIEW2_NUGET_VERSION}")
+    if(_webview2 STREQUAL "" OR NOT EXISTS "${webview2md}")
+        list(APPEND missing "Microsoft.Web.WebView2 ${MORPH_VER_MICROSOFT_WEB_WEBVIEW2}")
     endif()
 
     # The Windows SDK's own metadata, for the Windows.* half of the projection.
@@ -100,7 +151,10 @@ function(morph_find_winappsdk out)
 
     if(missing)
         list(JOIN missing "\n    " report)
-        message(STATUS "Morph.App.exe is not being built. Missing:\n    ${report}")
+        message(STATUS
+            "Morph.App.exe is not being built. Missing:\n    ${report}\n"
+            "  Run tools\\fetch-winappsdk.ps1 to fetch the pinned packages, or configure with\n"
+            "  -DMORPH_BUILD_APP=OFF to stop asking.")
         set(${out} FALSE PARENT_SCOPE)
         return()
     endif()

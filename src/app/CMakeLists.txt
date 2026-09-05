@@ -22,12 +22,17 @@ set_target_properties(morph_app_core PROPERTIES FOLDER "processes")
 
 # --- The window --------------------------------------------------------------
 #
-# OFF by default, and the reason is in winappsdk.cmake: the Windows App SDK is
-# read out of the local NuGet cache rather than fetched by a pinned, checksummed
-# script the way PDFium is. Until that script exists this builds on a machine
-# that has opened a WinUI project before and nowhere else, and a default that
-# breaks a fresh clone is not a default.
-option(MORPH_BUILD_APP "Build Morph.App.exe (needs the Windows App SDK)" OFF)
+# ON by default now that tools/fetch-winappsdk.ps1 exists: the Windows App SDK
+# is pinned and checksummed the way PDFium is, so asking for it is no longer
+# asking a fresh clone for something only a machine that has opened a WinUI
+# project can produce.
+#
+# ON is not the same as required. A tree without the packages fetched still
+# builds everything else and says what is missing -- see morph_find_winappsdk --
+# because the engine, the worker, the broker and the whole test suite have no
+# dependency on the SDK at all, and a first configure that fails on the UI would
+# hide that.
+option(MORPH_BUILD_APP "Build Morph.App.exe (needs the Windows App SDK)" ON)
 
 if(NOT MORPH_BUILD_APP)
     return()
@@ -37,7 +42,6 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/winappsdk.cmake")
 
 morph_find_winappsdk(MORPH_HAVE_WINAPPSDK)
 if(NOT MORPH_HAVE_WINAPPSDK)
-    message(WARNING "MORPH_BUILD_APP is ON but the Windows App SDK was not found.")
     return()
 endif()
 

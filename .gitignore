@@ -20,4 +20,10 @@ compile_commands.json
 # The architecture document is a local reference, not a deliverable.
 # Section numbers in source comments point at it.
 *.pdf
-third_party/
+# Fetched binaries: PDFium and the Windows App SDK packages, both pinned and
+# checksummed by tools/fetch-*.ps1 rather than committed. The contents are
+# ignored rather than the directory, because git will not un-ignore a file
+# inside an ignored DIRECTORY -- and the pin manifest below has to be in the
+# tree: it is what the fetcher, the build and the licence gate all read.
+third_party/*
+!third_party/winappsdk-packages.txt

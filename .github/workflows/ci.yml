@@ -65,6 +65,15 @@ jobs:
           path: third_party/pdfium
           key: pdfium-${{ hashFiles('tools/fetch-pdfium.ps1') }}
 
+      # Keyed by the pin manifest, which is where the versions and the checksums
+      # live. Changing a pin changes the key; the fetch script itself does not,
+      # because editing a comment in it should not throw 90 MB away.
+      - name: Cache the Windows App SDK
+        uses: actions/cache@v4
+        with:
+          path: third_party/winappsdk
+          key: winappsdk-${{ hashFiles('third_party/winappsdk-packages.txt') }}
+
       - name: Environment
         run: |
           "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
@@ -75,11 +84,27 @@ jobs:
       - name: Fetch PDFium
         run: ./tools/fetch-pdfium.ps1
 
+      - name: Fetch the Windows App SDK
+        run: ./tools/fetch-winappsdk.ps1
+
       # Configure, build, scan licences, test. Section 14's scanner is inside
       # this step rather than beside it, because it reads what vcpkg installed
       # for this preset and there is nothing to read before the build.
       - name: Build and test
         run: ./tools/build.ps1 -Preset ${{ matrix.preset }} -Target all
+
+      # MORPH_BUILD_APP is ON by default and NOT fatal when the SDK is absent --
+      # a tree without it still builds the engine, the worker, the broker and
+      # every test, which is the right default for a first configure. The cost
+      # of that is a CI job that would go green having quietly stopped building
+      # the app, so the artefact is asserted rather than assumed.
+      - name: Morph.App.exe was built
+        run: |
+          $app = "out/build/${{ matrix.preset }}/bin/Morph.App.exe"
+          if (-not (Test-Path $app)) {
+            throw "$app is missing. The Windows App SDK fetch or MORPH_BUILD_APP has regressed -- look for 'Morph.App.exe is not being built' in the configure log above."
+          }
+          "$app -- $((Get-Item $app).Length) bytes"
 
       # Section 17's budgets, gated at section 16's ten percent. Release only:
       # a debug build measures the iterator checks rather than the pipeline.
@@ -101,6 +126,23 @@ jobs:
         with:
           name: ThirdPartyNotices
           path: out/build/x64-release/ThirdPartyNotices.txt
+          if-no-files-found: error
+
+      # The packaged layout, as the build stages it: the executable, the
+      # bootstrapper, pdfium, the framework resource indexes and a manifest.
+      # Section 13's milestone is not finished until someone can install this,
+      # and they cannot do that from a log line saying it linked.
+      - name: Upload Morph.App
+        if: matrix.preset == 'x64-release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Morph.App-x64
+          path: |
+            out/build/x64-release/bin/Morph.App.exe
+            out/build/x64-release/bin/*.dll
+            out/build/x64-release/bin/*.pri
+            out/build/x64-release/bin/AppxManifest.xml
+            out/build/x64-release/bin/Assets/
           if-no-files-found: error
 
   asan:

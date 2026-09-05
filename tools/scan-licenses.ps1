@@ -26,6 +26,17 @@
     in the exceptions below with a licence a person actually looked up, and the
     comment says where they looked.
 
+    NOT EVERYTHING COMES FROM VCPKG, and for a while this scanner behaved as
+    though it did. PDFium is fetched, and was already checked. The Windows App
+    SDK is fetched too -- five NuGet packages, three of them under the Microsoft
+    Software License Terms rather than anything on section 14's allowlist -- and
+    was not checked at all. A required gate with a blind spot over the largest
+    binary dependency in the tree is worse than no gate, because it is believed.
+
+    The SDK is read from third_party/winappsdk-packages.txt, the same pin
+    manifest tools/fetch-winappsdk.ps1 and src/app/winappsdk.cmake read, so a
+    package added to the build is a package this scanner sees.
+
 .PARAMETER Path
     The vcpkg_installed directory to scan. Defaults to the debug preset's.
 
@@ -79,6 +90,25 @@ $exceptions = @{
     # share/lexbor/copyright is the Apache License 2.0 in full. Section 14's
     # table lists it as Apache-2.0 with a notice and NOTICE-file obligation.
     'lexbor' = 'Apache-2.0'
+}
+
+# Licences that are NOT on the allowlist and are accepted anyway, each with the
+# reason written out. The allowlist exists to keep copyleft out of code that is
+# linked into Morph; a proprietary first-party redistributable is a different
+# question, and answering it by quietly widening $allowed would lose the
+# distinction for the next person.
+#
+# Keyed by the exact licence string in the pin manifest.
+$platformLicences = @{
+    'Microsoft Software License Terms' = @'
+Microsoft first-party redistributable. The Windows App SDK's terms grant
+distribution of the runtime as part of an application (the "Distributable Code"
+section), which is what section 13 does with it. It is proprietary, so it is not
+on section 14's allowlist and must not be added to it -- the allowlist is about
+copyleft obligations propagating into Morph, and these terms impose none of that
+kind. What they DO impose is a notice obligation, which is why the licence text
+is required to be present and is copied into ThirdPartyNotices.
+'@
 }
 
 # --- Where to look ------------------------------------------------------------
@@ -174,8 +204,8 @@ $rows = $rows | Sort-Object Package -Unique
 # --- Verdict ------------------------------------------------------------------
 $failures = @()
 Write-Host ''
-Write-Host ('{0,-24} {1,-34} {2}' -f 'Package', 'Licence', 'Verdict')
-Write-Host ('-' * 78)
+Write-Host ('{0,-46} {1,-34} {2}' -f 'Package', 'Licence', 'Verdict')
+Write-Host ('-' * 100)
 
 foreach ($row in $rows) {
     if ($row.Licence -eq 'UNKNOWN') {
@@ -193,7 +223,7 @@ foreach ($row in $rows) {
             $verdict = if ($row.Source -eq 'exception') { 'ok (by exception)' } else { 'ok' }
         }
     }
-    Write-Host ('{0,-24} {1,-34} {2}' -f $row.Package, $row.Licence, $verdict)
+    Write-Host ('{0,-46} {1,-34} {2}' -f $row.Package, $row.Licence, $verdict)
 }
 
 # PDFium is fetched rather than installed by vcpkg, so it has no SPDX document.
@@ -202,14 +232,96 @@ foreach ($row in $rows) {
 $pdfiumLicence = Join-Path $repo 'third_party\pdfium\LICENSE'
 if (Test-Path (Join-Path $repo 'third_party\pdfium')) {
     if (Test-Path $pdfiumLicence) {
-        Write-Host ('{0,-24} {1,-34} {2}' -f 'pdfium', 'BSD-3-Clause', 'ok (fetched)')
+        Write-Host ('{0,-46} {1,-34} {2}' -f 'pdfium', 'BSD-3-Clause', 'ok (fetched)')
     } else {
-        Write-Host ('{0,-24} {1,-34} {2}' -f 'pdfium', 'BSD-3-Clause', 'MISSING LICENCE TEXT')
+        Write-Host ('{0,-46} {1,-34} {2}' -f 'pdfium', 'BSD-3-Clause', 'MISSING LICENCE TEXT')
         $failures += [PSCustomObject]@{ Package = 'pdfium'; Licence = 'BSD-3-Clause' }
     }
 }
 
+# The Windows App SDK is fetched from NuGet rather than installed by vcpkg, so
+# it has no SPDX document either. The pins are read from the same manifest the
+# fetcher and the build use, so this cannot fall behind what is actually linked.
+$sdkRows = @()
+$sdkManifest = Join-Path $repo 'third_party\winappsdk-packages.txt'
+if (Test-Path $sdkManifest) {
+    $sdkRoots = @(
+        (Join-Path $repo 'third_party\winappsdk'),
+        (Join-Path $env:USERPROFILE '.nuget\packages')
+    )
+
+    foreach ($line in Get-Content $sdkManifest) {
+        $text = $line.Trim()
+        if (-not $text -or $text.StartsWith('#')) { continue }
+        $fields = $text -split '\|'
+        if ($fields.Count -ne 5) { throw "Malformed line in ${sdkManifest}:`n  $text" }
+
+        $id = $fields[0].Trim()
+        $version = $fields[1].Trim()
+        $licence = $fields[3].Trim()
+        $licenceFile = $fields[4].Trim()
+
+        $lower = $id.ToLowerInvariant()
+        $found = $sdkRoots |
+            ForEach-Object { Join-Path $_ "$lower\$version" } |
+            Where-Object { Test-Path $_ } |
+            Select-Object -First 1
+
+        $sdkRows += [PSCustomObject]@{
+            Package   = $id
+            Version   = $version
+            Licence   = $licence
+            Copyright = if ($found) { Join-Path $found $licenceFile } else { $null }
+            Present   = [bool]$found
+        }
+    }
+}
+
+foreach ($row in $sdkRows) {
+    $label = "$($row.Package) $($row.Version)"
+
+    # A pinned package that is not fetched is not a pass. It is a scan that did
+    # not happen, and reporting it as ok is exactly the blind spot this section
+    # was added to close.
+    if (-not $row.Present) {
+        Write-Host ('{0,-46} {1,-34} {2}' -f $label, $row.Licence, 'NOT FETCHED -- run tools\fetch-winappsdk.ps1')
+        $failures += $row
+        continue
+    }
+    if (-not (Test-Path $row.Copyright)) {
+        Write-Host ('{0,-46} {1,-34} {2}' -f $label, $row.Licence, 'MISSING LICENCE TEXT')
+        $failures += $row
+        continue
+    }
+
+    $check = Test-Licence -Expression $row.Licence
+    if ($check.Denied) {
+        Write-Host ('{0,-46} {1,-34} {2}' -f $label, $row.Licence, "DENIED ($($check.Denied))")
+        $failures += $row
+    } elseif ($check.Allowed) {
+        Write-Host ('{0,-46} {1,-34} {2}' -f $label, $row.Licence, 'ok (fetched)')
+    } elseif ($platformLicences.ContainsKey($row.Licence)) {
+        Write-Host ('{0,-46} {1,-34} {2}' -f $label, $row.Licence, 'ok (platform component)')
+    } else {
+        Write-Host ('{0,-46} {1,-34} {2}' -f $label, $row.Licence, 'not on the allowlist and not a declared platform component')
+        $failures += $row
+    }
+}
+
 Write-Host ''
+
+# The reasons, once each rather than once per package: three of the five carry
+# the same terms, and a wall of identical paragraphs is a thing people skip.
+$statedReasons = $sdkRows |
+    Where-Object { $platformLicences.ContainsKey($_.Licence) } |
+    Select-Object -ExpandProperty Licence -Unique
+foreach ($reason in $statedReasons) {
+    Write-Host "$reason -- why this is accepted:" -ForegroundColor DarkGray
+    foreach ($sentence in ($platformLicences[$reason] -split "`n")) {
+        Write-Host "  $sentence" -ForegroundColor DarkGray
+    }
+    Write-Host ''
+}
 
 # --- Notices ------------------------------------------------------------------
 if ($Notices) {
@@ -232,6 +344,7 @@ if ($Notices) {
         }
         $lines += ''
     }
+    $written = $rows.Count
     if (Test-Path $pdfiumLicence) {
         $lines += ('=' * 78)
         $lines += 'pdfium -- BSD-3-Clause'
@@ -239,6 +352,21 @@ if ($Notices) {
         $lines += ''
         $lines += (Get-Content $pdfiumLicence)
         $lines += ''
+        $written++
+    }
+
+    # The SDK's terms carry a notice obligation of their own, and a notices file
+    # that omits the largest redistributable in the package is not a notices
+    # file.
+    foreach ($row in $sdkRows) {
+        if (-not $row.Present -or -not (Test-Path $row.Copyright)) { continue }
+        $lines += ('=' * 78)
+        $lines += "$($row.Package) $($row.Version) -- $($row.Licence)"
+        $lines += ('=' * 78)
+        $lines += ''
+        $lines += (Get-Content $row.Copyright)
+        $lines += ''
+        $written++
     }
 
     $directory = Split-Path -Parent $Notices
@@ -246,7 +374,7 @@ if ($Notices) {
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
     }
     Set-Content -Path $Notices -Value $lines -Encoding UTF8
-    Write-Host "Wrote $($rows.Count + 1) notices to $Notices" -ForegroundColor DarkGray
+    Write-Host "Wrote $written notices to $Notices" -ForegroundColor DarkGray
 }
 
 if ($failures.Count -gt 0) {
@@ -254,4 +382,11 @@ if ($failures.Count -gt 0) {
     throw "$($failures.Count) dependency licence(s) are not acceptable. Section 14 keeps GPL, AGPL and LGPLv3 out of this tree; a package that cannot be identified is treated the same way until someone identifies it."
 }
 
-Write-Host "All $($rows.Count) dependency licences are on section 14's allowlist." -ForegroundColor Green
+$platformCount = ($sdkRows | Where-Object { $platformLicences.ContainsKey($_.Licence) }).Count
+$checked = $rows.Count + $sdkRows.Count
+if (Test-Path $pdfiumLicence) { $checked++ }
+if ($platformCount -gt 0) {
+    Write-Host "All $checked dependency licences are acceptable: $($checked - $platformCount) on section 14's allowlist, $platformCount platform components with the reason stated above." -ForegroundColor Green
+} else {
+    Write-Host "All $checked dependency licences are on section 14's allowlist." -ForegroundColor Green
+}

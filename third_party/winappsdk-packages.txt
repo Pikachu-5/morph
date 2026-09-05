@@ -1,0 +1,40 @@
+# The Windows App SDK pin (architecture sections 13.2 and 14).
+#
+# ONE FILE, THREE READERS. tools/fetch-winappsdk.ps1 downloads and verifies from
+# it, src/app/winappsdk.cmake locates the unpacked packages from it, and
+# tools/scan-licenses.ps1 checks the licence of every line in it. They used to be
+# three copies of the same five version numbers, and the failure mode of that is
+# a build that links one release of the SDK against the metadata of another --
+# which does not fail at the link, it fails at run time with a type that does not
+# activate.
+#
+# Format, one package per line, pipe-separated, no spaces around the bars:
+#
+#     id | version | sha256-of-the-nupkg | licence | licence file in the package
+#
+# THE CHECKSUM IS OVER THE .nupkg, not over anything unpacked. A .nupkg is a zip
+# and unpacking is not reproducible byte for byte, so the archive is the only
+# thing there is a stable hash of. Each one below was taken from a package NuGet
+# had already validated against the feed's own SHA-512, so the chain is: the
+# feed's hash, checked by NuGet at install; this hash, checked by us at fetch.
+#
+# TO UPDATE: change the version, run the fetcher, and let it fail -- it prints
+# the hash it got. Put that hash here only once you know why the old one stopped
+# matching. The three WindowsAppSDK sub-packages version independently but ship
+# as one release, and MORPH_WINAPPSDK_MAJORMINOR in winappsdk.cmake has to be the
+# major.minor of that release: headers, metadata and the framework package the
+# process resolves at run time must all be one release of one product.
+#
+# LICENCES. Section 14's allowlist is about copyleft risk in code that is LINKED
+# into Morph. Three of these are not on it and cannot be: the Windows App SDK is
+# a Microsoft first-party redistributable under the Microsoft Software License
+# Terms, which is proprietary and grants redistribution as part of an
+# application. That is a deliberate exception with a reason, not an omission --
+# scan-licenses.ps1 states it in the report rather than passing them silently,
+# because the whole point of A2 was that the gate had a blind spot here.
+
+Microsoft.WindowsAppSDK.WinUI|1.8.260204000|B072ADDA92F9960747825B43CDF4D4AF61ACE52D7B28D9538595FA739CDC353B|Microsoft Software License Terms|license.txt
+Microsoft.WindowsAppSDK.Foundation|1.8.260203002|76504AFED42C2F0A30DA895A4F232F2A43EA2E00C48B0062D39D5A8C465E4FD6|Microsoft Software License Terms|license.txt
+Microsoft.WindowsAppSDK.InteractiveExperiences|1.8.260125001|DBBF2A9FD670416F6C19012F1E975F04367A86546E3AFAA5F6F666D79FEF385D|Microsoft Software License Terms|license.txt
+Microsoft.Windows.CppWinRT|2.0.250303.1|955E3051B35DB1C00177ED14AB6B7B995C3B32A53FDB6C184EA53B1DBA66E439|MIT|LICENSE
+Microsoft.Web.WebView2|1.0.3719.77|2F6BE3A10A1A8D6D1FDE986AF4131DAB344F8181FFFE75590824E0F4B037ED73|BSD-3-Clause|LICENSE.txt
