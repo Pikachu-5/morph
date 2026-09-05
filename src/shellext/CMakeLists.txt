@@ -4,7 +4,7 @@
 # that what the menu decides can be tested without Explorer, a surrogate, or a
 # registered class. Everything COM is in the DLL; everything decidable is not.
 
-add_library(morph_shellext_core STATIC menu.cpp)
+add_library(morph_shellext_core STATIC menu.cpp launch.cpp)
 add_library(morph::shellext::core ALIAS morph_shellext_core)
 
 target_include_directories(morph_shellext_core PUBLIC ${PROJECT_SOURCE_DIR}/src)

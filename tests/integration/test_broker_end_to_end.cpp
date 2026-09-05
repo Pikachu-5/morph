@@ -23,6 +23,8 @@
 #include <windows.h>
 
 #include "morph/core/caps.h"
+#include "morph/core/doc/pipeline.h"
+#include "morph/core/extensions.h"
 #include "morph/core/ipc/pipe.h"
 #include "morph/core/ipc/protocol.h"
 
@@ -222,6 +224,17 @@ TEST_CASE("The broker converts a file end to end", "[broker][integration]") {
                                        });
         REQUIRE(docx != targets.targets.end());
         CHECK(docx->hopCount >= 1u);
+
+        // And nothing internal is in the list. The IR is how markdown REACHES
+        // docx, not somewhere a person can ask to stop: it is a graph node with
+        // no extension and no file on disk. The published menu table has always
+        // left it out (broker/capabilities.h) and this reply did not, which put
+        // "MORPH-IR" in the app's target picker.
+        for (const ipc::TargetOption& option : targets.targets) {
+            INFO(option.profile);
+            CHECK(option.profile != std::string(doc::kIrProfileId));
+            CHECK_FALSE(ExtensionFor(option.profile).empty());
+        }
     }
 
     SECTION("it publishes a menu table that agrees with what it answers") {

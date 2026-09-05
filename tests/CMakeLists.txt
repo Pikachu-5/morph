@@ -29,6 +29,7 @@ add_executable(morph_tests
     unit/test_broker_output.cpp
     unit/test_capability_table.cpp
     unit/test_shell_menu.cpp
+    unit/test_shell_launch.cpp
     unit/test_app_model.cpp
     unit/test_app_client.cpp
     unit/test_broker_scheduling.cpp

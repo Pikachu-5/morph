@@ -11,6 +11,7 @@
 #include <wrl/client.h>
 #include <wrl/implements.h>
 
+#include "launch.h"
 #include "menu.h"
 #include "morph/core/caps.h"
 #include "morph/core/ipc/pipe.h"
@@ -175,18 +176,39 @@ void SubmitJob(std::vector<std::string> paths, std::string targetProfile) {
     (void)connection.ReceiveAs(accepted);
 }
 
-// Enumerates the selection off Explorer's thread and submits it.
+// Opens the app on a selection. Section 9.2's generic entry.
+void LaunchApp(const std::vector<std::wstring>& paths) {
+    std::wstring command = AppCommandLine(ipc::InstallDirectory(), paths);
+    if (command.empty()) return;
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION info{};
+
+    // No CREATE_NO_WINDOW: unlike the broker, this one is meant to be seen. The
+    // handles are closed immediately because nothing here waits for the app --
+    // the surrogate is torn down within seconds of the menu closing.
+    if (!::CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr,
+                          &startup, &info)) {
+        return;
+    }
+    ::CloseHandle(info.hThread);
+    ::CloseHandle(info.hProcess);
+}
+
+// Enumerates the selection off Explorer's thread and hands the paths to `then`.
 //
 // Section 9.3: "Do not enumerate ten thousand items on the calling thread: take
 // the count, marshal the array into the worker ... and return immediately."
-void SubmitSelection(IShellItemArray* items, std::string targetProfile) {
+template <typename Fn>
+void WithSelection(IShellItemArray* items, Fn then) {
     IStream* marshalled = nullptr;
     if (FAILED(::CoMarshalInterThreadInterfaceInStream(IID_IShellItemArray, items,
                                                        &marshalled))) {
         return;
     }
 
-    std::thread([marshalled, target = std::move(targetProfile)]() mutable {
+    std::thread([marshalled, then = std::move(then)]() mutable {
         const HRESULT hr = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         {
             ComPtr<IShellItemArray> array;
@@ -195,7 +217,7 @@ void SubmitSelection(IShellItemArray* items, std::string targetProfile) {
             if (SUCCEEDED(::CoGetInterfaceAndReleaseStream(marshalled, IID_PPV_ARGS(&array)))) {
                 DWORD count = 0;
                 if (SUCCEEDED(array->GetCount(&count))) {
-                    std::vector<std::string> paths;
+                    std::vector<std::wstring> paths;
                     paths.reserve(count);
                     for (DWORD i = 0; i < count; ++i) {
                         ComPtr<IShellItem> item;
@@ -203,16 +225,26 @@ void SubmitSelection(IShellItemArray* items, std::string targetProfile) {
                         LPWSTR path = nullptr;
                         if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)) &&
                             path != nullptr) {
-                            paths.push_back(Narrow(path));
+                            paths.emplace_back(path);
                             ::CoTaskMemFree(path);
                         }
                     }
-                    SubmitJob(std::move(paths), std::move(target));
+                    then(std::move(paths));
                 }
             }
         }
         if (SUCCEEDED(hr)) ::CoUninitialize();
     }).detach();
+}
+
+void SubmitSelection(IShellItemArray* items, std::string targetProfile) {
+    WithSelection(items, [target = std::move(targetProfile)](
+                             std::vector<std::wstring> wide) mutable {
+        std::vector<std::string> paths;
+        paths.reserve(wide.size());
+        for (const std::wstring& path : wide) paths.push_back(Narrow(path));
+        SubmitJob(std::move(paths), std::move(target));
+    });
 }
 
 // --- The commands ------------------------------------------------------------
@@ -359,10 +391,14 @@ public:
         return enumerator.CopyTo(commands);
     }
 
-    IFACEMETHODIMP Invoke(IShellItemArray*, IBindCtx*) override {
+    IFACEMETHODIMP Invoke(IShellItemArray* items, IBindCtx*) override {
         // Only reachable when the submenu is empty -- section 9.2's static
-        // entry. The app is not built yet, so this does the honest thing and
-        // does nothing rather than pretending.
+        // "Convert with Morph..." entry, which opens the app on the selection
+        // and lets the person choose a target there. That is also the honest
+        // answer when the capability table is missing: the app can start the
+        // broker, and the broker knows what this build can do.
+        if (items == nullptr) return E_INVALIDARG;
+        WithSelection(items, [](std::vector<std::wstring> paths) { LaunchApp(paths); });
         return S_OK;
     }
 

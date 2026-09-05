@@ -10,6 +10,7 @@
 #include <windows.h>
 
 #include "capabilities.h"
+#include "morph/core/extensions.h"
 #include "morph/core/ipc/worker_protocol.h"
 #include "morph/core/planner.h"
 #include "output.h"
@@ -373,8 +374,18 @@ void Broker::HandleQueryTargets(ClientLink& client, const ipc::QueryTargets& req
 
         std::vector<ipc::TargetOption> reachable;
         for (const auto& [node, plan] : FindAllTargets(graph_, planRequest)) {
+            const std::string& profile = graph_.Node(node).Id();
+            // A node with no extension of its own is somewhere a plan passes
+            // THROUGH, not somewhere it can stop: application/morph-ir is the
+            // only one today. The capability table has always applied this rule
+            // (capabilities.h) and the pipe did not, which is how "MORPH-IR"
+            // reached the app's picker -- an internal graph node in a list of
+            // things a person can ask for. Section 12.2: never offer what cannot
+            // be done.
+            if (ExtensionFor(profile).empty()) continue;
+
             ipc::TargetOption option;
-            option.profile = graph_.Node(node).Id();
+            option.profile = profile;
             option.fidelity = static_cast<std::uint8_t>(plan.fidelity());
             option.hopCount = plan.cost.hopCount;
             option.estimatedMs = plan.cost.estimatedMs;
