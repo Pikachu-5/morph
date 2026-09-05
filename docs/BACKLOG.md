@@ -153,15 +153,17 @@ reason to trust the green tick less than it looks.
 
 1. **E1, the name.** A5's icons, A6's certificate and A7's reservation all wait
    on it, and it is the only item here that cannot be started by writing code.
-2. **B7, B8, B3, C4.** The UI slice. B7 is an explicit "must" in §12.1 and an
-   undraggable window reads as broken before anyone notices anything else; C4
-   gets WIC, Media Foundation and PDFium out of the UI process.
-3. **A3, then A6.** The GitHub SKU needs no Store review, and `.appinstaller`
+2. **B4, B6, B9.** The three remaining half-day features. None waits on
+   anything, and B9 is the one a user would notice: Morph is absent from
+   Windows 11's "Show more options" menu entirely.
+3. **F1, F2, F4, F5.** Four of §17's nine budgets are unmeasured and three are
+   measurable today. F1, app cold start, is the one with a user waiting in it.
+4. **A3, then A6.** The GitHub SKU needs no Store review, and `.appinstaller`
    updates are what make dogfooding real. A3 also unblocks F3.
-4. **B2.** Options and presets — the feature §2 says the app exists for.
+5. **B2.** Options and presets — the feature §2 says the app exists for.
    Protocol and CLI first, per §3's peers rule.
-5. **B5.** Tagged PDF, the largest remaining fidelity win and the hardest to
-   verify.
+6. **B5.** Tagged PDF, the largest remaining fidelity win and the hardest to
+   verify: plausible code is easy here and knowing it is right is not.
 
 §19's own shipping advice was *"a public v1 at M8 is a real product… ship there,
 get users, then land DOCX in v1.1."* This is past M8 **and** past DOCX. The
