@@ -40,9 +40,9 @@ Pre-M0. What exists today:
 | Performance budgets, measured (§17) | Implemented, one budget missed |
 | `Morph.App.exe` | Not started |
 
-407 tests green (`ctest --preset x64-debug`), including one that starts the
+411 tests green (`ctest --preset x64-debug`), including one that starts the
 broker, lets it start a worker, and converts a real file over the real pipe. The
-same 407 pass under AddressSanitizer (`.\tools\build.ps1 -Preset x64-asan`),
+same 411 pass under AddressSanitizer (`.\tools\build.ps1 -Preset x64-asan`),
 which is the configuration the hostile-input corpus is worth running in.
 
 §16 calls the IR round-trip property test the one that "catches more real bugs
