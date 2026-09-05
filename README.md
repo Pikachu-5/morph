@@ -32,25 +32,29 @@ Pre-M0. What exists today:
 | `morph.broker.exe` — singleton, job queue, scheduler, worker lifetime (§3.1, §10.3, §11) | Implemented |
 | Capability table memory map (§9.2) | Implemented |
 | Image provider — WIC, every installed codec (§6) | Implemented |
-| `morph.shellext.dll` — IExplorerCommand, zero-IPC menu (§9) | Implemented, not yet registered |
+| `morph.shellext.dll` — IExplorerCommand, zero-IPC menu (§9) | Implemented; registered and loaded by Explorer |
 | A/V provider — Media Foundation, remux fast path (§7.1) | Implemented |
 | FFmpeg backend — subprocess, remux fast path (§7.2) | Implemented, no binary shipped |
 | IR round-trip property tests (§16) | Implemented |
 | Fuzz targets and the hostile-input corpus (§15, §16) | Implemented |
 | Performance budgets, measured (§17) | Implemented, one budget missed |
 | `Morph.App.exe` — four screens as a state machine (§12.2) | Implemented, tested without a window |
-| `Morph.App.exe` — the WinUI 3 shell (§12.1, §12.2) | All four screens; off by default |
+| `Morph.App.exe` — the WinUI 3 shell (§12.1, §12.2) | All four screens; built by default |
+| Windows App SDK, pinned and licence-scanned (§13.2, §14) | Implemented |
+| MSIX manifest, one template for both SKUs (§9.1, §13) | Implemented, unsigned |
 
-[`docs/BACKLOG.md`](docs/BACKLOG.md) is the full list of what remains: M12
-packaging, the features §§2, 6.2, 8.5, 8.7 and 9.2 ask for and this does not have
-yet, the limitations that are known and priced, and — the group worth reading
-first — the things that are deliberately undone, each with the reason, because
-several of them look like small omissions and are not.
+[`docs/BACKLOG.md`](docs/BACKLOG.md) is the full list of what remains: the rest
+of M12 packaging, the features §§2, 6.2, 8.5, 8.7 and 9.2 ask for and this does
+not have yet, the limitations that are known and priced, and — the group worth
+reading first — the things that are deliberately undone, each with the reason,
+because several of them look like small omissions and are not.
 
-439 tests green (`ctest --preset x64-debug`), including one that starts the
-broker, lets it start a worker, and converts a real file over the real pipe. The
-same 439 pass under AddressSanitizer (`.\tools\build.ps1 -Preset x64-asan`),
-which is the configuration the hostile-input corpus is worth running in.
+448 tests green (`ctest --preset x64-debug`), including one that starts the
+broker, lets it start a worker, and converts a real file over the real pipe, and
+two that drive the context menu through a registered package the way Explorer
+does. The suite passes under AddressSanitizer
+(`.\tools\build.ps1 -Preset x64-asan`), which is the configuration the
+hostile-input corpus is worth running in.
 
 §16 calls the IR round-trip property test the one that "catches more real bugs
 than any other single test", and it was right. It generates documents nobody
@@ -100,10 +104,20 @@ with no IPC and no file IO, which is what §9.2 requires and what the 8 ms budge
 in §17 leaves room for. Its logic — what a mixed selection may be offered, when
 to fall back to a single generic entry, how a fidelity rating reads in four
 words — is a separate library from the COM shell around it and is tested without
-Explorer. It has not been loaded by Explorer yet: that needs package identity,
-which arrives with the packaging milestone. The manifest that will register it is
-in [`packaging/msix`](packaging/msix/AppxManifest.xml), holding the one CLSID it
-shares with the code.
+Explorer. It **is** loaded by Explorer now: registering
+[the manifest](packaging/msix/AppxManifest.xml.in) resolves the CLSID to a
+DllHost surrogate rather than into the caller, and driving `GetState` and
+`EnumSubCommands` across that boundary costs 399 µs warm against §17's 8 ms
+budget — 23 ms cold, which is the surrogate being created and is paid once. Two
+integration tests do exactly that, and skip when no package is registered.
+
+One thing registration taught, because it looks like a bug in the menu and is
+not: a **packaged** surrogate and an **unpackaged** broker do not share the
+capability table. Identity puts the surrogate in a different named-object
+namespace, so a broker started from a shell prompt publishes where the surrogate
+cannot see it, and the menu correctly shows §9.2's generic entry. Nothing
+shipped is affected — a real install gives every process in §3.1 the same
+identity — but the obvious way to test it by hand is.
 
 DOCX scope is held to §8.4's P1 (paragraphs, runs, headings, character
 formatting, hyperlinks, images) and P2 (lists, tables). P3 (footnotes,
@@ -136,11 +150,22 @@ parser that no type exists, including the framework's own, and every templated
 control then fails to resolve its theme brushes. The symptom is a window that
 renders text and dies on its first `Button`.
 
-`Morph.App.exe` is `OFF` by default (`-DMORPH_BUILD_APP=ON`), because the Windows
-App SDK is currently read out of the local NuGet cache rather than fetched by a
-pinned, checksummed script the way PDFium is. That script, and the SDK's entry in
-§14's licence matrix, belong with the packaging milestone that has to write the
-same versions into the MSIX manifest anyway.
+`Morph.App.exe` is built by default. The Windows App SDK is pinned and
+checksummed the way PDFium is:
+[`tools/fetch-winappsdk.ps1`](tools/fetch-winappsdk.ps1) downloads five NuGet
+packages and verifies each SHA-256 before unpacking anything. The pins live in
+one file, [`third_party/winappsdk-packages.txt`](third_party/winappsdk-packages.txt),
+which the fetcher, the build and the licence scanner all read — three copies of
+five version numbers is how a build links one release of the SDK against the
+metadata of another, and that does not fail at the link, it fails at run time.
+
+`ON` is not the same as required. A tree without the packages fetched still
+builds the engine, the worker, the broker and every test, and says what is
+missing; CI asserts the executable exists rather than trusting the log. The SDK
+is in §14's licence matrix too, which it was not before: three of the five
+packages are Microsoft first-party redistributables rather than anything on the
+allowlist, and a required gate with a blind spot over the largest binary
+dependency in the tree is worse than no gate, because it is believed.
 
 All four of §12.2's screens are drawn: a Mica window with the tall extended title
 bar §12.1 specifies, the whole of it a drop target; a picker grouped by family
@@ -148,9 +173,18 @@ with a fidelity badge and a hop count on every indirect route; a virtualised
 queue with per-row progress and per-row cancel, aggregate progress in the title
 bar and on the taskbar; and a done screen with the notes actually incurred and
 real reasons on the failures. Files named on the command line arrive the same way
-dropped ones do, which is what §9.2's degraded path needs. `packaging/msix`
-carries a development manifest so the packaged path §13 ships is exercised now
-rather than at the end.
+dropped ones do, which is what §9.2's degraded path needs — and §9.2's generic
+menu entry now launches the app with the selection, which was all that remained
+of it once the app grew a command line.
+
+`packaging/msix` carries **one** manifest template, generated twice. There used
+to be two hand-written ones with a note in each saying they had to be kept in
+step; they were not, and the shipping one had no `PackageDependency` on the
+Windows App Runtime — which a packaged app does not bootstrap and must declare,
+and whose absence produces a process that dies before `main` with nothing
+written anywhere. The two now differ in three strings and share everything
+structural, including the CLSID, which a test checks against the constant the
+DLL was compiled with.
 
 **M3's exit criterion is met** — drag files in, watch them convert — and the
 first thing it did was find a bug nothing else could. §11.2 caps a worker's job
@@ -266,6 +300,18 @@ and `test_planner.cpp` has it as a regression test.
 Requires Visual Studio 2022 with the *Desktop development with C++* workload,
 CMake 3.25+, Ninja, and vcpkg.
 
+Two prebuilt dependencies are fetched rather than committed, each pinned to a
+version and a SHA-256 that are checked before anything is unpacked. Run them
+once:
+
+```powershell
+.\tools\fetch-pdfium.ps1
+.\tools\fetch-winappsdk.ps1
+```
+
+The second is only needed for `Morph.App.exe`; without it everything else still
+builds and the configure step says what is missing. Then:
+
 ```powershell
 .\tools\build.ps1
 ```
@@ -311,10 +357,11 @@ src/broker/        morph.broker.exe — job queue, scheduler, capability publish
 src/worker/        morph.worker.exe — all parsing, decoding and encoding
 src/shellext/      morph.shellext.dll — IExplorerCommand
 src/app/           Morph.App.exe — WinUI, C++/WinRT
-packaging/         MSIX manifests, Store and GitHub SKUs
+packaging/         MSIX manifest template, Store and GitHub SKUs
 tests/             unit, property, golden, fuzz, bench
-third_party/       fetched prebuilts (PDFium); not committed
-tools/             build script, PDFium fetcher, license scanner
+third_party/       fetched prebuilts (PDFium, Windows App SDK); not committed
+  winappsdk-packages.txt   the SDK pin: version, SHA-256 and licence per package
+tools/             build script, dependency fetchers, license scanner
 docs/              BACKLOG.md — what is left, and what must stay undone
 ```
 
@@ -325,6 +372,15 @@ LGPLv3 dependency enters the tree. Third-party components are limited to MIT,
 BSD-2, BSD-3, Apache-2.0, BSL-1.0, ISC and Zlib. FFmpeg is consumed as a
 subprocess in the GitHub SKU only, never linked. See section 14.
 
+The Windows App SDK is the one exception, and it is stated rather than waved
+through: three of its packages are Microsoft first-party redistributables under
+the Microsoft Software License Terms, which is proprietary and is not on the
+allowlist and must not be added to it — that list is about copyleft obligations
+propagating into linked code, and these terms impose none of that kind. The
+scanner prints the reason next to them every run, and fails if a pinned package
+is not fetched at all, because a scan that did not happen is not a scan that
+passed.
+
 The enforcement is `tools/scan-licenses.ps1`, which runs as a build step:
 
 ```powershell
@@ -332,7 +388,8 @@ The enforcement is `tools/scan-licenses.ps1`, which runs as a build step:
 ```
 
 It reads what vcpkg actually installed rather than what the manifest asked for —
-a transitive dependency is precisely the one that would arrive unnoticed — and
-fails on anything outside the allowlist, on anything explicitly copyleft, and on
-any package whose licence cannot be determined. It also writes the
+a transitive dependency is precisely the one that would arrive unnoticed — plus
+the two dependencies vcpkg never sees, PDFium and the Windows App SDK. It fails
+on anything outside the allowlist, on anything explicitly copyleft, and on any
+package whose licence cannot be determined. It also writes the
 `ThirdPartyNotices.txt` that §14's table obliges for every component.

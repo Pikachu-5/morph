@@ -12,29 +12,45 @@ one of them as the single most likely way this project stalls.
 Sizes are rough and assume the existing code as a starting point.
 
 Status as of the last commit: M0–M11 complete, M3 complete, **M12 is the only
-milestone remaining**. 439 tests green in `x64-debug` and under AddressSanitizer.
+milestone remaining, and it is now mostly done**. 448 tests green in `x64-debug`
+and under AddressSanitizer.
+
+What closed since the last revision: A1 (the SDK is pinned and fetched), A2 (it
+is in the licence matrix), A4 (one manifest template, and Explorer has now
+actually loaded the shell extension), B1 and C1. What is left of M12 is the
+FFmpeg fetch, real assets, the two SKUs, and a signing certificate — which is
+the part that cannot start until §20.1's naming question is answered.
 
 ---
 
 ## A. M12 — packaging and distribution (§13)
 
 The only milestone left, and the gate on everything else being real. The shell
-extension is §2's "daily-driver path", it is implemented and tested, and Explorer
-has never loaded it — because that needs package identity, which lives here.
+extension is §2's "daily-driver path"; it needed package identity before
+Explorer could load it, and that is done — what remains here is distribution
+rather than capability.
 
 | # | Item | Notes | Size |
 |---|---|---|---|
-| A1 | `tools/fetch-winappsdk.ps1` | Pinned version + SHA-256, in the shape `fetch-pdfium.ps1` already has. Flips `MORPH_BUILD_APP` to `ON` by default and puts `Morph.App.exe` in CI. Today `src/app/winappsdk.cmake` reads the SDK out of the local NuGet cache, which is why the app is off by default. | ~half a day |
-| A2 | Windows App SDK in §14's licence matrix | `tools/scan-licenses.ps1` covers vcpkg and PDFium and does not see the SDK at all. The gate is a required check; it should not have a blind spot. | ~2 hours |
-| A3 | FFmpeg pinned fetch (GitHub SKU) | §7.2/§7.3: same build, two SKUs, distinguished by whether `ffmpeg.exe` is present. No binary is fetched yet. Pin + checksum, same shape as A1. | ~half a day |
-| A4 | Shipping `AppxManifest.xml`, with the shell extension | `packaging/msix/AppxManifest.xml` already carries the surrogate and the `windows.fileExplorerContextMenus` entry, sharing one CLSID with `src/shellext/shellext.h`. Registering it is what finally loads the menu in Explorer. Blocked since M2. | ~1 day |
+| ~~A1~~ | ~~`tools/fetch-winappsdk.ps1`~~ | **Done.** Five packages, pinned by version and SHA-256 in `third_party/winappsdk-packages.txt`, which the fetcher, `src/app/winappsdk.cmake` and the licence scanner all read. `MORPH_BUILD_APP` is `ON`; `third_party` is searched before the local NuGet cache; CI caches, fetches, asserts the executable exists and uploads the staged layout. | |
+| ~~A2~~ | ~~Windows App SDK in §14's licence matrix~~ | **Done.** Three of the five are Microsoft Software License Terms, accepted as platform components with the reason printed rather than by widening the allowlist. A pinned package that is not fetched fails the scan. | |
+| A3 | FFmpeg pinned fetch (GitHub SKU) | §7.2/§7.3: same build, two SKUs, distinguished by whether `ffmpeg.exe` is present. No binary is fetched yet. Pin + checksum, same shape as A1 — and the pin manifest is now a pattern to copy rather than invent. | ~half a day |
+| ~~A4~~ | ~~Shipping `AppxManifest.xml`, with the shell extension~~ | **Done, less the signing.** One template (`AppxManifest.xml.in`) generated twice; the CLSID comes from CMake and a test compares it with the constant the DLL was compiled with. Registered, and `tests/integration/test_shellext_registered.cpp` drives the menu through the surrogate the way Explorer does. The shipping manifest packs into a real `.msix` with `makeappx`. | |
 | A5 | Real package assets | `packaging/msix/Assets/*.png` are solid-colour placeholders generated to make registration succeed. Needs a real icon set. | design work |
-| A6 | Both SKUs | `packaging/store/` and `packaging/github/` are empty directories. Store bundle config; GitHub `.appinstaller` for updates. | ~1–2 days |
+| A6 | Both SKUs | `packaging/store/` and `packaging/github/` are empty directories. Store bundle config; GitHub `.appinstaller` for updates. Signing needs a certificate, which needs E1. | ~1–2 days |
 | A7 | Store submission | §20 flags certification of a context-menu extension as a medium risk with slow review; the advice there is to submit a minimal build early to get the review clock started. | unknown |
 
-**Also here:** the dev manifest (`AppxManifest.dev.xml`) and the shipping one
-must be kept in step by hand for as long as both exist. Worth collapsing into one
-generated file during A4.
+**Learned while doing A4, and worth not rediscovering.** A *packaged* surrogate
+and an *unpackaged* broker do not share the capability table: identity puts the
+surrogate in a different named-object namespace, so a broker started from a
+shell prompt publishes where the surrogate cannot see it, and the menu shows
+§9.2's generic entry for a reason that has nothing to do with the selection.
+Nothing shipped is affected. To see a populated submenu by hand, start the
+broker *through* the package (`Start-Process 'shell:AppsFolder\<PFN>!Morph'`).
+
+Warm cost of `GetState` + `EnumSubCommands` across the surrogate, debug build:
+**399 µs** against §17's 8 ms. Cold is 23 ms, which is the surrogate being
+created, and is paid once per Explorer session.
 
 ---
 
@@ -42,7 +58,7 @@ generated file during A4.
 
 | # | Item | Where | Section | Size |
 |---|---|---|---|---|
-| B1 | The shell extension's generic entry should launch the app with the selection | `src/shellext/command.cpp:362` — `Invoke` returns `S_OK` and does nothing, with a comment saying "the app is not built yet". That is now stale: the app takes files on its command line. | §9.2 | ~1 hour |
+| ~~B1~~ | ~~The generic entry should launch the app with the selection~~ | **Done.** `src/shellext/launch.h` builds the command line, tested against the real `CommandLineToArgvW`; a selection too long to fit is refused rather than truncated. | §9.2 | |
 | B2 | Options and presets in the app | `AppModel::BuildJob` always sends an empty option bag. The whole provider option surface today is `png.filter`, `quality`, `landscape`. | §2 | ~3–4 days |
 | B3 | Output policy UI | Destination folder, naming template, overwrite rule. Settable on `AppModel::output()`, no UI behind it. | §12.2, §10.2 | ~1 day |
 | B4 | Store deep link when a codec is missing | A `kMissingCapability` result should become a button that opens the codec in the Store, not an error message. | §6.2 | ~half a day |
@@ -63,7 +79,7 @@ declaration, discovery, and the screen.
 
 | # | Item | Where | Notes |
 |---|---|---|---|
-| C1 | `MORPH-IR` is offered as a conversion target | Visible in the app's picker | The IR is an internal graph node leaking into a user-facing list. Filter internal profiles out of `QueryTargets` in the broker. ~1 hour. |
+| ~~C1~~ | ~~`MORPH-IR` is offered as a conversion target~~ | — | **Done.** `QueryTargets` now applies the rule the published menu table always did: a node with no extension of its own is somewhere a plan passes through, not somewhere it can stop. |
 | C2 | DOCX continuation paragraphs are not reconstructed | `tests/property/test_ir_roundtrip.cpp:313` | A list item holding two blocks comes back as an item, a paragraph, and a new list — Word expresses a continuation paragraph as list style + indent without numbering, and the reader closes the list instead. The property generator emits one block per item because of it. Fixing it lifts that restriction too. |
 | C3 | Sub-lists at one depth cannot disagree | `src/providers/docooxml/docx_writer.cpp` | A level is one `w:lvl` for the whole tree, so two sub-lists under one parent that want different markers or different first numbers have no spelling. Declared with `list-level-markers-shared` / `list-level-start-shared`. This is a format limit, not a defect — listed so nobody re-derives it. |
 | C4 | The app links the whole provider table to probe | `src/app/main.cpp`, `FileProber` | §12.2 wants files probed on drop; doing it in-process pulls WIC, Media Foundation and PDFium into the UI process. `AppModel`'s injected `Prober` exists precisely so this can become a round trip to the worker, which already has every provider loaded. One function to change. |
@@ -91,7 +107,7 @@ declaration, discovery, and the screen.
 
 | # | Question | State |
 |---|---|---|
-| E1 | §20.1 — name and identity | "Morph" is a working codename throughout: `morph::`, `Morph.Converter`, the pipe name. Trademark search and Store name reservation still to do, and A6/A7 depend on the answer. |
+| E1 | §20.1 — name and identity | **Now the blocker.** "Morph" is a working codename throughout: `morph::`, `Morph.Converter`, the pipe name, and the placeholder `CN=Morph (placeholder)` in the manifest template — which has to match a signing certificate's subject exactly. Trademark search and Store name reservation still to do. A5, A6 and A7 all wait on this, and it is the only remaining item that cannot be started by writing code. |
 | E2 | §20.2 — ARM64 | Settled as x64 only for now. `CMakePresets.json` carries an `arm64-release` preset and an `arch-arm64` fragment, so enabling it is a matrix entry rather than a refactor. CI cannot run ARM64 tests on a `windows-latest` runner, which is why it is not already on. |
 | E3 | Licensing of Morph itself | MIT assumed throughout. §20 suggests deciding *now* whether the core stays MIT with a separate licence for the app shell, "rather than relicensing later with contributors in the tree". |
 
@@ -99,16 +115,19 @@ declaration, discovery, and the screen.
 
 ## Suggested order
 
-1. **B1 and C1.** Both are an hour, and B1 is now only a stale comment and a
-   `CreateProcess`. They finish §9.2 properly.
-2. **A1–A4.** Packaging. This is the gate: it is what finally puts the context
-   menu in Explorer, what lets the thing be installed and dogfooded, and what
-   §19 has as the last milestone. Nothing else is shippable without it.
-3. **B2 and B3.** Options, presets and output policy — the feature §2 says the
+1. **E1, the name.** It has moved from a question to a blocker. A5's icon set,
+   A6's signing certificate and A7's Store reservation all wait on it, and it
+   is the only item here that cannot be started by writing code.
+2. **A6, then A3.** The two SKUs, with the GitHub one first: it needs no Store
+   review, and `.appinstaller` updates are what make dogfooding real. A3 is the
+   FFmpeg pin that the GitHub SKU is defined by.
+3. **A7.** Submit early, per §20's advice about the review clock.
+4. **B2 and B3.** Options, presets and output policy — the feature §2 says the
    app exists for. Protocol and CLI first, per §3's peers rule.
-4. **B5.** Tagged PDF, the largest remaining fidelity win.
+5. **B5.** Tagged PDF, the largest remaining fidelity win.
 
 §19's own shipping advice was *"a public v1 at M8 is a real product… ship there,
 get users, then land DOCX in v1.1."* This is past M8 **and** past DOCX. The
-engine is finished; packaging is the only thing between it and something people
-can install.
+engine is finished, the package installs and the context menu loads; what is
+between this and something people can download is a name, an icon and a
+certificate.
