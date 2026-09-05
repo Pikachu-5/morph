@@ -41,6 +41,12 @@ Pre-M0. What exists today:
 | `Morph.App.exe` — four screens as a state machine (§12.2) | Implemented, tested without a window |
 | `Morph.App.exe` — the WinUI 3 shell (§12.1, §12.2) | All four screens; off by default |
 
+[`docs/BACKLOG.md`](docs/BACKLOG.md) is the full list of what remains: M12
+packaging, the features §§2, 6.2, 8.5, 8.7 and 9.2 ask for and this does not have
+yet, the limitations that are known and priced, and — the group worth reading
+first — the things that are deliberately undone, each with the reason, because
+several of them look like small omissions and are not.
+
 439 tests green (`ctest --preset x64-debug`), including one that starts the
 broker, lets it start a worker, and converts a real file over the real pipe. The
 same 439 pass under AddressSanitizer (`.\tools\build.ps1 -Preset x64-asan`),
@@ -309,6 +315,7 @@ packaging/         MSIX manifests, Store and GitHub SKUs
 tests/             unit, property, golden, fuzz, bench
 third_party/       fetched prebuilts (PDFium); not committed
 tools/             build script, PDFium fetcher, license scanner
+docs/              BACKLOG.md — what is left, and what must stay undone
 ```
 
 ## Licensing
