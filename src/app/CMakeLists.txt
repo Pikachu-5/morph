@@ -51,6 +51,9 @@ target_include_directories(morph_app PRIVATE
     "${MORPH_CPPWINRT_DIR}"
     ${MORPH_WINAPPSDK_INCLUDE})
 
+target_compile_definitions(morph_app PRIVATE
+    MORPH_WINAPPSDK_MAJORMINOR=${MORPH_WINAPPSDK_MAJORMINOR})
+
 target_link_libraries(morph_app PRIVATE
     morph::app::core
     # The provider table, shared with the worker so the two processes cannot
@@ -73,5 +76,27 @@ add_custom_command(TARGET morph_app POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${MORPH_WINAPPSDK_DLL}" "$<TARGET_FILE_DIR:morph_app>"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${MORPH_WINAPPSDK_PRI} "$<TARGET_FILE_DIR:morph_app>"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${MORPH_PDFIUM_DLL}" "$<TARGET_FILE_DIR:morph_app>"
-    COMMENT "Copying the Windows App SDK bootstrapper and pdfium next to Morph.App")
+    COMMENT "Copying the Windows App SDK bootstrapper, its resource indexes and pdfium next to Morph.App")
+
+# The development manifest and its assets, so the build output is a loose
+# package layout that `Add-AppxPackage -Register` accepts as it stands.
+#
+# Package identity is not a nicety here. WinUI's theme dictionaries do not load
+# for a loose unpackaged executable -- XamlControlsResources throws, and the
+# first templated control in the tree fails to resolve its default style and
+# takes the window down. Everything built from primitives renders without it,
+# which is why a window with nothing but text in it looked like it worked.
+#
+# The manifest registered here deliberately does NOT carry the shell extension:
+# see packaging/msix/AppxManifest.dev.xml for why.
+add_custom_command(TARGET morph_app POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/packaging/msix/AppxManifest.dev.xml"
+            "$<TARGET_FILE_DIR:morph_app>/AppxManifest.xml"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${PROJECT_SOURCE_DIR}/packaging/msix/Assets"
+            "$<TARGET_FILE_DIR:morph_app>/Assets"
+    COMMENT "Staging the development package layout for Morph.App")

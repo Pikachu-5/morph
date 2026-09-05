@@ -9,19 +9,29 @@
 // generator (winappsdk.cmake). The cost is no designer and no XAML hot reload,
 // which section 12.3 had already written off.
 //
+// Section 18 says the WinUI project "needs MSBuild". It does not, and that is
+// now demonstrated rather than argued -- the second correction to the document
+// this repository carries, after the planner's Dijkstra sweep.
+//
 // WHAT IS IN THIS FILE is layout and marshalling, deliberately and only. Every
 // decision the app makes belongs to AppModel (model.h), which is a library with
 // no window and no IO, because that is the half that can be wrong in ways a
-// person clicking buttons will not notice. This file owns three things the model
-// cannot: the dispatcher, the two background threads, and the Win32 details
-// section 12.1 is specific about.
+// person clicking buttons will not notice. This file owns the four things the
+// model cannot: the dispatcher, the background threads, the Win32 details
+// section 12.1 is specific about, and the virtualisation section 12.2 asks for.
 #include <windows.h>
 #undef GetCurrentTime
 
+#include <shellapi.h>
 #include <shlobj.h>
+#include <shobjidl_core.h>
 
 #include <MddBootstrap.h>
+#include <microsoft.ui.xaml.window.h>
 
+#include <atomic>
+#include <cstdio>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <thread>
@@ -31,14 +41,20 @@
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.ApplicationModel.DataTransfer.h>
-#include <winrt/Windows.UI.h>
 #include <winrt/Windows.Storage.h>
+#include <winrt/Windows.UI.h>
 #include <winrt/Microsoft.UI.h>
 #include <winrt/Microsoft.UI.Dispatching.h>
 #include <winrt/Microsoft.UI.Text.h>
 #include <winrt/Microsoft.UI.Windowing.h>
 #include <winrt/Microsoft.UI.Xaml.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
+// RangeBase and ButtonBase live here, and ProgressBar::Value and Button::Click
+// are inherited from them -- so without this the projection compiles but every
+// use of either is "a function that returns auto used before it is defined".
+#include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
+#include <winrt/Microsoft.UI.Xaml.Markup.h>
+#include <winrt/Microsoft.UI.Xaml.Interop.h>
 #include <winrt/Microsoft.UI.Xaml.Media.h>
 
 #include "app/client.h"
@@ -49,11 +65,28 @@
 namespace xaml = winrt::Microsoft::UI::Xaml;
 namespace controls = winrt::Microsoft::UI::Xaml::Controls;
 namespace windowing = winrt::Microsoft::UI::Windowing;
+namespace foundation = winrt::Windows::Foundation;
 
 using namespace morph;
 using namespace morph::app;
 
 namespace {
+
+// TEMPORARY diagnostic scaffolding. Beside the executable rather than in the
+// working directory, because a packaged activation does not have one worth
+// writing to.
+void Log(std::string_view line) {
+    wchar_t module[MAX_PATH] = {};
+    ::GetModuleFileNameW(nullptr, module, MAX_PATH);
+    std::filesystem::path path(module);
+    path.replace_filename(L"morph-app.log");
+
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, path.c_str(), L"a") == 0 && f != nullptr) {
+        fprintf(f, "%.*s\n", static_cast<int>(line.size()), line.data());
+        fclose(f);
+    }
+}
 
 std::wstring Widen(std::string_view text) {
     if (text.empty()) return {};
@@ -75,6 +108,29 @@ std::string Narrow(std::wstring_view text) {
     return narrow;
 }
 
+// The badge, in the four words the shell extension's menu uses for the same job.
+// The sentence behind it is Explain(); this is what fits on a button.
+std::wstring BadgeFor(const TargetChoice& choice) {
+    std::wstring badge;
+    switch (choice.fidelity) {
+        case Fidelity::Lossless:   badge = L"lossless"; break;
+        case Fidelity::High:       badge = L"re-encoded once"; break;
+        case Fidelity::Structural: badge = L"layout not kept"; break;
+        case Fidelity::TextOnly:   badge = L"text only"; break;
+        case Fidelity::Rasterized: badge = L"becomes an image"; break;
+    }
+    // "the hop count if the path is indirect" -- and only then, because "1 hop"
+    // on every other button teaches nobody anything.
+    if (choice.indirect()) {
+        badge += L" · " + std::to_wstring(choice.hopCount) + L" steps";
+    }
+    return badge;
+}
+
+std::wstring FileNameOf(const std::string& path) {
+    return std::filesystem::path(path).filename().wstring();
+}
+
 // The real prober behind AppModel's injected one (section 12.2: "probe the files
 // (cheap, 8 KiB each)").
 //
@@ -88,6 +144,9 @@ std::string Narrow(std::wstring_view text) {
 // and to nothing else: that is what the Prober seam is for.
 class FileProber {
 public:
+    explicit FileProber(std::shared_ptr<worker::Providers> providers)
+        : providers_(std::move(providers)) {}
+
     ProbeAnswer operator()(const std::string& path) const {
         ProbeAnswer answer;
         const std::filesystem::path file(path);
@@ -115,26 +174,62 @@ public:
         return answer;
     }
 
-    explicit FileProber(std::shared_ptr<worker::Providers> providers)
-        : providers_(std::move(providers)) {}
-
 private:
     std::shared_ptr<worker::Providers> providers_;
+};
+
+class Shell;
+
+// --- The queue's rows --------------------------------------------------------
+//
+// Section 12.2 asks for a VIRTUALISED ItemsRepeater, because "a batch can be
+// thousands of files". Virtualisation normally arrives with a DataTemplate,
+// which is markup -- so the template is an IElementFactory instead, which is
+// what a DataTemplate compiles down to anyway. ItemsRepeater realises only the
+// rows on screen and recycles the rest, exactly as it would with markup.
+//
+// There are no bindings either. A realised row is found by index with
+// TryGetElement and updated in place; a row that is not realised is populated
+// correctly the moment it scrolls into view, from the model, which is the only
+// copy of the truth.
+struct RowFactory : winrt::implements<RowFactory, xaml::IElementFactory> {
+    explicit RowFactory(Shell* shell) : shell_(shell) {}
+
+    xaml::UIElement GetElement(xaml::ElementFactoryGetArgs const& args);
+    void RecycleElement(xaml::ElementFactoryRecycleArgs const& args);
+
+private:
+    Shell* shell_;
 };
 
 // --- The window --------------------------------------------------------------
 
 class Shell {
 public:
+    // Files named on the command line, which arrive the same way dropped ones
+    // do. Section 9.2's degraded path is the reason this exists: when the
+    // capability map is absent the shell extension shows one static "Convert
+    // with Morph…" that launches the app, and launching it onto an empty drop
+    // zone would lose the selection the user had already made.
+    void Open(std::vector<std::string> paths) { pending_ = std::move(paths); }
+
     void Start() {
         providers_ = std::make_shared<worker::Providers>();
         model_ = std::make_unique<AppModel>(FileProber{providers_});
 
+        xaml::Application::Current().UnhandledException(
+            [](foundation::IInspectable const&,
+               xaml::UnhandledExceptionEventArgs const& args) {
+                Log("UNHANDLED: " + winrt::to_string(args.Message()));
+            });
+
+        Log("step: window");
         window_ = xaml::Window{};
         window_.Title(L"Morph");
 
         // Section 12.1: Mica is one property on the Window, and BaseAlt is the
         // tabbed variant -- there is no tab strip here, so this is the plain one.
+        Log("step: mica");
         window_.SystemBackdrop(xaml::Media::MicaBackdrop{});
 
         auto titleBar = window_.AppWindow().TitleBar();
@@ -143,16 +238,45 @@ public:
         titleBar.ButtonBackgroundColor(winrt::Windows::UI::Colors::Transparent());
         titleBar.ButtonInactiveBackgroundColor(winrt::Windows::UI::Colors::Transparent());
 
+        // The HWND, for the one thing section 12.2 asks for that WinUI has no
+        // API of its own for: taskbar progress.
+        Log("step: hwnd");
+        if (const auto native = window_.try_as<::IWindowNative>()) {
+            native->get_WindowHandle(&hwnd_);
+        }
+        (void)::CoCreateInstance(CLSID_TaskbarList, nullptr, CLSCTX_INPROC_SERVER,
+                                 IID_PPV_ARGS(taskbar_.put()));
+
+        Log("step: buildlayout");
         BuildLayout();
+        Log("step: content");
         window_.Content(root_);
+        Log("step: activate");
         window_.Activate();
 
         // Connecting starts a broker, which starts a worker, which describes the
         // graph. None of that belongs on the thread painting the window.
         std::thread([this] { Connect(); }).detach();
+        Log("step: connect thread started");
     }
 
+    // Probes whatever the command line named, once there is a broker to ask
+    // about it. Called from Connect rather than from Start, because the picker
+    // has nothing to show until the broker has answered.
+    void OpenPending() {
+        if (pending_.empty()) return;
+        Probe(std::exchange(pending_, {}));
+    }
+
+    // Called back from RowFactory, which is why it is public and why the factory
+    // holds a raw pointer: both live exactly as long as the window does.
+    [[nodiscard]] const AppModel& model() const noexcept { return *model_; }
+    void PopulateRow(xaml::UIElement const& element, int index) const;
+    void CancelRow(int index);
+
 private:
+    // --- Layout --------------------------------------------------------------
+
     void BuildLayout() {
         root_ = controls::Grid{};
         // "The entire window is a drop target." Not a rectangle inside it, and
@@ -163,47 +287,284 @@ private:
         root_.DragOver({this, &Shell::OnDragOver});
         root_.Drop({this, &Shell::OnDrop});
 
-        status_ = controls::TextBlock{};
-        status_.Text(L"Drop files here");
-        status_.FontSize(28);
-        status_.HorizontalAlignment(xaml::HorizontalAlignment::Center);
-        status_.TextAlignment(xaml::TextAlignment::Center);
+        Log("step: buildchooser");
+        BuildChooser();
+        Log("step: buildqueue");
+        BuildQueue();
 
-        detail_ = controls::TextBlock{};
-        detail_.Text(L"Connecting to the conversion engine…");
-        detail_.Opacity(0.7);
-        detail_.HorizontalAlignment(xaml::HorizontalAlignment::Center);
-        detail_.TextAlignment(xaml::TextAlignment::Center);
-        detail_.TextWrapping(xaml::TextWrapping::Wrap);
-
-        // The picker's buttons, filled in when the broker answers. One row per
-        // family in the model's order, which is already grouped (model.cpp).
-        targets_ = controls::StackPanel{};
-        targets_.Orientation(controls::Orientation::Horizontal);
-        targets_.HorizontalAlignment(xaml::HorizontalAlignment::Center);
-        targets_.Spacing(8);
-
-        controls::StackPanel column;
-        column.Spacing(12);
-        column.VerticalAlignment(xaml::VerticalAlignment::Center);
-        column.Margin(xaml::ThicknessHelper::FromLengths(48, 48, 48, 48));
-        column.Children().Append(status_);
-        column.Children().Append(detail_);
-        column.Children().Append(targets_);
-
-        root_.Children().Append(column);
+        root_.Children().Append(chooser_);
+        root_.Children().Append(queue_);
+        Log("step: showscreen");
+        ShowScreen();
     }
 
-    void Connect() {
-        const Result connected = client_.Connect();
-        Post([this, connected] {
-            if (connected.ok()) {
-                detail_.Text(L"Ready.");
-            } else {
-                // Never "connection failed": section 12.2 wants the reason, and
-                // BrokerClient already carries one worth reading.
-                detail_.Text(Widen(connected.message()));
+    // The drop zone and the target picker are one panel, because they are one
+    // screen with more on it: "on drop ... move straight to target selection".
+    void BuildChooser() {
+        heading_ = controls::TextBlock{};
+        heading_.Text(L"Drop files here");
+        heading_.FontSize(28);
+        heading_.HorizontalAlignment(xaml::HorizontalAlignment::Center);
+        heading_.TextAlignment(xaml::TextAlignment::Center);
+
+        subheading_ = controls::TextBlock{};
+        subheading_.Text(L"Connecting to the conversion engine…");
+        subheading_.Opacity(0.7);
+        subheading_.HorizontalAlignment(xaml::HorizontalAlignment::Center);
+        subheading_.TextAlignment(xaml::TextAlignment::Center);
+        subheading_.TextWrapping(xaml::TextWrapping::Wrap);
+        subheading_.MaxWidth(560);
+
+        // One StackPanel per family, filled in by ShowTargets. Grouping is not a
+        // second data structure: the model sorts targets so that a change of
+        // family IS a group boundary, and this walks the list once.
+        groups_ = controls::StackPanel{};
+        groups_.Spacing(16);
+        groups_.HorizontalAlignment(xaml::HorizontalAlignment::Center);
+
+        chooser_ = controls::StackPanel{};
+        chooser_.Spacing(14);
+        chooser_.VerticalAlignment(xaml::VerticalAlignment::Center);
+        chooser_.Margin(xaml::ThicknessHelper::FromLengths(48, 48, 48, 48));
+        chooser_.Children().Append(heading_);
+        chooser_.Children().Append(subheading_);
+        chooser_.Children().Append(groups_);
+    }
+
+    void BuildQueue() {
+        queueHeading_ = controls::TextBlock{};
+        queueHeading_.FontSize(20);
+        queueHeading_.Margin(xaml::ThicknessHelper::FromLengths(0, 0, 0, 4));
+
+        overall_ = controls::ProgressBar{};
+        overall_.Minimum(0);
+        overall_.Maximum(1);
+        overall_.Margin(xaml::ThicknessHelper::FromLengths(0, 0, 0, 12));
+
+        rows_ = winrt::single_threaded_observable_vector<foundation::IInspectable>();
+        repeater_ = controls::ItemsRepeater{};
+        repeater_.ItemsSource(rows_);
+        repeater_.ItemTemplate(winrt::make<RowFactory>(this));
+        controls::StackLayout layout;
+        layout.Spacing(4);
+        repeater_.Layout(layout);
+
+        controls::ScrollViewer scroller;
+        scroller.Content(repeater_);
+        scroller.VerticalScrollBarVisibility(controls::ScrollBarVisibility::Auto);
+        controls::Grid::SetRow(scroller, 2);
+
+        stopAll_ = controls::Button{};
+        stopAll_.Content(winrt::box_value(L"Stop"));
+        stopAll_.Click({this, &Shell::OnStopAll});
+
+        openFolder_ = controls::Button{};
+        openFolder_.Content(winrt::box_value(L"Open folder"));
+        openFolder_.Click({this, &Shell::OnOpenFolder});
+
+        convertMore_ = controls::Button{};
+        convertMore_.Content(winrt::box_value(L"Convert more"));
+        convertMore_.Click({this, &Shell::OnConvertMore});
+
+        controls::StackPanel footer;
+        footer.Orientation(controls::Orientation::Horizontal);
+        footer.Spacing(8);
+        footer.Margin(xaml::ThicknessHelper::FromLengths(0, 12, 0, 0));
+        footer.Children().Append(stopAll_);
+        footer.Children().Append(openFolder_);
+        footer.Children().Append(convertMore_);
+        controls::Grid::SetRow(footer, 3);
+
+        controls::Grid::SetRow(queueHeading_, 0);
+        controls::Grid::SetRow(overall_, 1);
+
+        queue_ = controls::Grid{};
+        queue_.Margin(xaml::ThicknessHelper::FromLengths(32, 48, 32, 24));
+        for (const auto height : {xaml::GridUnitType::Auto, xaml::GridUnitType::Auto,
+                                  xaml::GridUnitType::Star, xaml::GridUnitType::Auto}) {
+            controls::RowDefinition definition;
+            definition.Height(xaml::GridLengthHelper::FromValueAndType(1, height));
+            queue_.RowDefinitions().Append(definition);
+        }
+        queue_.Children().Append(queueHeading_);
+        queue_.Children().Append(overall_);
+        queue_.Children().Append(scroller);
+        queue_.Children().Append(footer);
+    }
+
+    // --- Screens -------------------------------------------------------------
+
+    void ShowScreen() {
+        const Screen screen = model_->screen();
+        const bool queueing = screen == Screen::kQueue || screen == Screen::kDone;
+        chooser_.Visibility(queueing ? xaml::Visibility::Collapsed : xaml::Visibility::Visible);
+        queue_.Visibility(queueing ? xaml::Visibility::Visible : xaml::Visibility::Collapsed);
+
+        // A job that is over cannot be stopped, and one that is running has
+        // nothing to open yet.
+        const bool done = screen == Screen::kDone;
+        stopAll_.Visibility(done ? xaml::Visibility::Collapsed : xaml::Visibility::Visible);
+        openFolder_.Visibility(done ? xaml::Visibility::Visible : xaml::Visibility::Collapsed);
+        convertMore_.Visibility(done ? xaml::Visibility::Visible : xaml::Visibility::Collapsed);
+    }
+
+    void ShowChooser() {
+        const std::size_t count = model_->inputs().size();
+        heading_.Text(count == 0 ? std::wstring(L"Drop files here")
+                                 : Widen(std::to_string(count) + " file" +
+                                         (count == 1 ? "" : "s")));
+
+        if (count == 0) {
+            subheading_.Text(ready_ ? L"Ready." : Widen(readyMessage_));
+        } else if (!model_->targetsError().empty()) {
+            subheading_.Text(Widen(model_->targetsError()));
+        } else if (model_->targets().empty()) {
+            // Distinguishable from "we never found out", which is the branch
+            // above: SetTargetsUnavailable exists so these two cannot be
+            // confused for one another.
+            subheading_.Text(L"There is nothing all of these files can become.");
+        } else {
+            subheading_.Text(L"Convert to");
+        }
+
+        // A file nothing recognised is named with its reason rather than
+        // silently dropped from the count.
+        for (const InputFile& file : model_->inputs()) {
+            if (file.usable()) continue;
+            subheading_.Text(subheading_.Text() + L"\n" + Widen(file.error));
+        }
+
+        groups_.Children().Clear();
+        std::string family;
+        controls::StackPanel row{nullptr};
+        for (const TargetChoice& choice : model_->targets()) {
+            if (!row || choice.family != family) {
+                family = choice.family;
+
+                controls::TextBlock header;
+                header.Text(Widen(family));
+                header.Opacity(0.6);
+                header.HorizontalAlignment(xaml::HorizontalAlignment::Center);
+
+                row = controls::StackPanel{};
+                row.Orientation(controls::Orientation::Horizontal);
+                row.Spacing(8);
+                row.HorizontalAlignment(xaml::HorizontalAlignment::Center);
+
+                controls::StackPanel group;
+                group.Spacing(6);
+                group.Children().Append(header);
+                group.Children().Append(row);
+                groups_.Children().Append(group);
             }
+            row.Children().Append(TargetButton(choice));
+        }
+    }
+
+    [[nodiscard]] controls::Button TargetButton(const TargetChoice& choice) {
+        controls::TextBlock label;
+        label.Text(Widen(choice.label));
+        label.HorizontalAlignment(xaml::HorizontalAlignment::Center);
+
+        controls::TextBlock badge;
+        badge.Text(BadgeFor(choice));
+        badge.FontSize(11);
+        badge.Opacity(0.65);
+        badge.HorizontalAlignment(xaml::HorizontalAlignment::Center);
+
+        controls::StackPanel content;
+        content.Children().Append(label);
+        content.Children().Append(badge);
+
+        controls::Button button;
+        button.Content(content);
+        button.MinWidth(120);
+        // "Clicking a badge explains, in one sentence, what will be lost."
+        controls::ToolTipService::SetToolTip(
+            button, winrt::box_value(Widen(std::string(choice.Explanation()))));
+        button.Tag(winrt::box_value(Widen(choice.profile)));
+        button.Click({this, &Shell::OnChoose});
+        return button;
+    }
+
+    void ShowQueue() {
+        const std::size_t count = model_->rows().size();
+        if (rows_.Size() != count) {
+            rows_.Clear();
+            for (std::size_t i = 0; i < count; ++i) {
+                rows_.Append(winrt::box_value(static_cast<std::int32_t>(i)));
+            }
+        }
+        RefreshRealisedRows();
+        UpdateTotals();
+    }
+
+    // Only the rows on screen exist as elements. The rest are populated when
+    // they scroll into view, from the model, which never stopped being right.
+    void RefreshRealisedRows() {
+        for (std::size_t i = 0; i < model_->rows().size(); ++i) {
+            if (const auto element = repeater_.TryGetElement(static_cast<std::uint32_t>(i))) {
+                PopulateRow(element, static_cast<int>(i));
+            }
+        }
+    }
+
+    void RefreshRow(std::size_t index) {
+        if (index >= model_->rows().size()) return;
+        if (const auto element = repeater_.TryGetElement(static_cast<std::uint32_t>(index))) {
+            PopulateRow(element, static_cast<int>(index));
+        }
+        UpdateTotals();
+    }
+
+    void UpdateTotals() {
+        const double fraction = model_->aggregateFraction();
+        overall_.Value(fraction);
+
+        if (model_->screen() == Screen::kDone) {
+            std::string summary = std::to_string(model_->succeeded()) + " converted";
+            if (model_->failed() > 0) summary += ", " + std::to_string(model_->failed()) + " failed";
+            if (model_->cancelled() > 0) {
+                summary += ", " + std::to_string(model_->cancelled()) + " cancelled";
+            }
+            queueHeading_.Text(Widen(summary));
+            window_.Title(L"Morph");
+        } else {
+            const int percent = static_cast<int>(fraction * 100.0 + 0.5);
+            queueHeading_.Text(Widen(std::to_string(model_->succeeded() + model_->failed() +
+                                                    model_->cancelled()) +
+                                     " of " + std::to_string(model_->rows().size()) + " done"));
+            // "aggregate progress in the title bar and on the taskbar"
+            window_.Title(Widen(std::to_string(percent) + "% · Morph"));
+        }
+
+        if (taskbar_ && hwnd_ != nullptr) {
+            if (model_->screen() == Screen::kDone) {
+                (void)taskbar_->SetProgressState(hwnd_, TBPF_NOPROGRESS);
+            } else {
+                (void)taskbar_->SetProgressState(hwnd_, TBPF_NORMAL);
+                (void)taskbar_->SetProgressValue(hwnd_, static_cast<ULONGLONG>(fraction * 1000),
+                                                 1000);
+            }
+        }
+    }
+
+    // --- The broker ----------------------------------------------------------
+
+    void Connect() {
+        Log("connect: begin");
+        const Result connected = client_.Connect();
+        Log("connect: returned " + std::string(connected.ok() ? "ok" : connected.message()));
+        Post([this, connected] {
+            Log("connect: on ui thread");
+            ready_ = connected.ok();
+            // Never "connection failed": section 12.2 wants the reason, and
+            // BrokerClient already carries one worth reading.
+            readyMessage_ = connected.ok() ? "Ready." : connected.message();
+            if (model_->screen() == Screen::kDropZone) ShowChooser();
+            Log("connect: chooser shown");
+            OpenPending();
+            Log("connect: pending opened");
         });
     }
 
@@ -216,22 +577,111 @@ private:
             winrt::Microsoft::UI::Dispatching::DispatcherQueueHandler(std::forward<F>(work)));
     }
 
-    void OnDragOver(winrt::Windows::Foundation::IInspectable const&,
-                    xaml::DragEventArgs const& args) {
-        args.AcceptedOperation(winrt::Windows::ApplicationModel::DataTransfer::
-                                   DataPackageOperation::Copy);
+    void OnChoose(foundation::IInspectable const& sender, xaml::RoutedEventArgs const&) {
+        const auto button = sender.as<controls::Button>();
+        const std::string profile = Narrow(winrt::unbox_value<winrt::hstring>(button.Tag()));
+
+        const ipc::SubmitJob job = model_->BuildJob(profile);
+        // BuildJob returns an empty job for a target the picker never offered,
+        // and submitting one would convert files the user did not ask about.
+        if (job.inputPaths.empty()) return;
+
+        model_->Begin(job);
+        ShowScreen();
+        ShowQueue();
+
+        // RunJob blocks until the broker says the job is over. The Cancel that
+        // stops it is written from the UI thread while this one reads, which is
+        // what the duplex pipe was built for.
+        std::thread([this, job] { Run(job); }).detach();
+    }
+
+    void Run(const ipc::SubmitJob& job) {
+        JobEvents events;
+        events.accepted = [this](const ipc::JobAccepted& accepted) {
+            Post([this, accepted] {
+                model_->OnAccepted(accepted);
+                UpdateTotals();
+            });
+        };
+        events.progress = [this](const ipc::Progress& progress) {
+            Post([this, progress] {
+                model_->OnProgress(progress);
+                RefreshRow(progress.taskIndex);
+            });
+        };
+        events.taskDone = [this](const ipc::TaskDone& done) {
+            Post([this, done] {
+                model_->OnTaskDone(done);
+                RefreshRow(done.taskIndex);
+            });
+        };
+        events.jobDone = [this](const ipc::JobDone& done) {
+            Post([this, done] {
+                model_->OnJobDone(done);
+                ShowScreen();
+                ShowQueue();
+            });
+        };
+
+        const Result finished = client_.RunJob(job, events);
+        if (finished.ok()) return;
+
+        // A failure of the CONNECTION rather than of a file. The model turns it
+        // into a reason on every row still running, so the queue does not sit at
+        // sixty percent forever.
+        Post([this, finished] {
+            ipc::Error error;
+            error.status = static_cast<std::uint8_t>(finished.status());
+            error.message = finished.message();
+            model_->OnError(error);
+            ShowScreen();
+            ShowQueue();
+        });
+    }
+
+    void OnStopAll(foundation::IInspectable const&, xaml::RoutedEventArgs const&) {
+        model_->MarkCancellingAll();
+        RefreshRealisedRows();
+        if (const std::uint64_t job = model_->jobId(); job != 0) {
+            (void)client_.Cancel(job);
+        }
+    }
+
+    void OnOpenFolder(foundation::IInspectable const&, xaml::RoutedEventArgs const&) {
+        const std::string directory = model_->outputDirectory();
+        if (directory.empty()) return;
+        const std::wstring wide = Widen(directory);
+        (void)::ShellExecuteW(nullptr, L"open", wide.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+
+    void OnConvertMore(foundation::IInspectable const&, xaml::RoutedEventArgs const&) {
+        model_->ConvertMore();
+        rows_.Clear();
+        if (taskbar_ && hwnd_ != nullptr) {
+            (void)taskbar_->SetProgressState(hwnd_, TBPF_NOPROGRESS);
+        }
+        window_.Title(L"Morph");
+        ShowScreen();
+        ShowChooser();
+    }
+
+    // --- Dropping ------------------------------------------------------------
+
+    void OnDragOver(foundation::IInspectable const&, xaml::DragEventArgs const& args) {
+        args.AcceptedOperation(
+            winrt::Windows::ApplicationModel::DataTransfer::DataPackageOperation::Copy);
         args.DragUIOverride().Caption(L"Convert with Morph");
     }
 
-    winrt::fire_and_forget OnDrop(winrt::Windows::Foundation::IInspectable const&,
+    winrt::fire_and_forget OnDrop(foundation::IInspectable const&,
                                   xaml::DragEventArgs const& args) {
         const auto self = this;
         const auto deferral = args.GetDeferral();
         std::vector<std::string> paths;
 
-        if (args.DataView().Contains(
-                winrt::Windows::ApplicationModel::DataTransfer::StandardDataFormats::
-                    StorageItems())) {
+        if (args.DataView().Contains(winrt::Windows::ApplicationModel::DataTransfer::
+                                         StandardDataFormats::StorageItems())) {
             const auto items = co_await args.DataView().GetStorageItemsAsync();
             for (auto const& item : items) {
                 // A folder is not a conversion. Section 9.3 makes the same call
@@ -248,85 +698,219 @@ private:
         self->Probe(std::move(paths));
     }
 
-    // Probing reads bytes, so it is not something to do on the thread painting
-    // the window either, however cheap section 12.2 says it is: fifty files is
-    // fifty opens.
+    // Probing reads bytes and asking the broker is a round trip, so neither
+    // belongs on the thread painting the window -- however cheap section 12.2
+    // says probing is, fifty files is fifty opens.
     void Probe(std::vector<std::string> paths) {
-        status_.Text(L"Reading…");
+        heading_.Text(L"Reading…");
+        subheading_.Text(L"");
+        groups_.Children().Clear();
+
         std::thread([this, paths = std::move(paths)]() mutable {
-            // The model is the UI thread's, so the probe answers are collected
-            // here and applied there.
+            // The model belongs to the UI thread, so the probing is done against
+            // a staging copy here and the answers are applied there.
             AppModel staging{FileProber{providers_}};
             staging.Drop(paths);
 
-            std::vector<InputFile> probed(staging.inputs().begin(), staging.inputs().end());
             ipc::Targets targets;
-            const ipc::QueryTargets query = staging.TargetQuery();
             Result asked = Result::Ok();
+            const ipc::QueryTargets query = staging.TargetQuery();
             if (!query.sourceProfiles.empty()) {
                 asked = client_.QueryTargets(query.sourceProfiles, query.largestInputBytes,
                                              targets);
             }
 
-            Post([this, probed = std::move(probed), targets = std::move(targets),
-                  asked]() mutable { Show(std::move(probed), std::move(targets), asked); });
+            Post([this, paths = std::move(paths), targets = std::move(targets),
+                  asked]() mutable { Show(paths, targets, asked); });
         }).detach();
     }
 
-    void Show(std::vector<InputFile> probed, ipc::Targets targets, const Result& asked) {
-        std::vector<std::string> paths;
-        paths.reserve(probed.size());
-        for (const InputFile& file : probed) paths.push_back(file.path);
-
-        const std::size_t usable = model_->Drop(paths);
+    void Show(const std::vector<std::string>& paths, const ipc::Targets& targets,
+              const Result& asked) {
+        model_->Drop(paths);
         if (asked.ok()) {
             model_->SetTargets(targets);
         } else {
             model_->SetTargetsUnavailable(asked.message());
         }
-
-        status_.Text(Widen(std::to_string(model_->inputs().size()) + " file" +
-                           (model_->inputs().size() == 1 ? "" : "s")));
-
-        if (usable == 0) {
-            // The reason, not a count. A user who dropped one unreadable file
-            // wants to know what was wrong with it.
-            detail_.Text(Widen(model_->inputs().empty() ? std::string("Nothing was dropped.")
-                                                        : model_->inputs().front().error));
-        } else if (!model_->targetsError().empty()) {
-            detail_.Text(Widen(model_->targetsError()));
-        } else if (model_->targets().empty()) {
-            detail_.Text(L"There is nothing all of these files can become.");
-        } else {
-            detail_.Text(L"Convert to");
-        }
-
-        targets_.Children().Clear();
-        for (const TargetChoice& choice : model_->targets()) {
-            controls::Button button;
-            button.Content(winrt::box_value(Widen(choice.label)));
-            // "Clicking a badge explains, in one sentence, what will be lost."
-            // A tooltip is the cheapest honest version of that; the badge itself
-            // is the next screen's work.
-            controls::ToolTipService::SetToolTip(
-                button, winrt::box_value(Widen(std::string(choice.Explanation()))));
-            targets_.Children().Append(button);
-        }
+        ShowScreen();
+        ShowChooser();
     }
 
     xaml::Window window_{nullptr};
     controls::Grid root_{nullptr};
-    controls::TextBlock status_{nullptr};
-    controls::TextBlock detail_{nullptr};
-    controls::StackPanel targets_{nullptr};
+
+    controls::StackPanel chooser_{nullptr};
+    controls::TextBlock heading_{nullptr};
+    controls::TextBlock subheading_{nullptr};
+    controls::StackPanel groups_{nullptr};
+
+    controls::Grid queue_{nullptr};
+    controls::TextBlock queueHeading_{nullptr};
+    controls::ProgressBar overall_{nullptr};
+    controls::ItemsRepeater repeater_{nullptr};
+    foundation::Collections::IObservableVector<foundation::IInspectable> rows_{nullptr};
+    controls::Button stopAll_{nullptr};
+    controls::Button openFolder_{nullptr};
+    controls::Button convertMore_{nullptr};
+
+    winrt::com_ptr<::ITaskbarList3> taskbar_;
+    HWND hwnd_ = nullptr;
 
     std::shared_ptr<worker::Providers> providers_;
     std::unique_ptr<AppModel> model_;
     BrokerClient client_;
+
+    bool ready_ = false;
+    std::string readyMessage_ = "Connecting to the conversion engine…";
+    std::vector<std::string> pending_;
 };
 
+// The one piece of process-wide state, because Application::Start's callback
+// takes no arguments and the App it makes cannot be handed any.
+std::vector<std::string> g_openWith;
+
+// --- RowFactory, now that Shell is a complete type ---------------------------
+
+xaml::UIElement RowFactory::GetElement(xaml::ElementFactoryGetArgs const& args) {
+    controls::TextBlock name;
+    name.TextTrimming(xaml::TextTrimming::CharacterEllipsis);
+    name.VerticalAlignment(xaml::VerticalAlignment::Center);
+    controls::Grid::SetColumn(name, 0);
+
+    controls::ProgressBar bar;
+    bar.Minimum(0);
+    bar.Maximum(1);
+    bar.Width(160);
+    bar.VerticalAlignment(xaml::VerticalAlignment::Center);
+    controls::Grid::SetColumn(bar, 1);
+
+    controls::TextBlock state;
+    state.Opacity(0.7);
+    state.MinWidth(90);
+    state.VerticalAlignment(xaml::VerticalAlignment::Center);
+    controls::Grid::SetColumn(state, 2);
+
+    // Per-row cancel, which section 12.2 asks for by name.
+    controls::Button stop;
+    stop.Content(winrt::box_value(L"Stop"));
+    controls::Grid::SetColumn(stop, 3);
+
+    controls::Grid row;
+    row.ColumnSpacing(12);
+    for (const auto width : {xaml::GridUnitType::Star, xaml::GridUnitType::Auto,
+                             xaml::GridUnitType::Auto, xaml::GridUnitType::Auto}) {
+        controls::ColumnDefinition definition;
+        definition.Width(xaml::GridLengthHelper::FromValueAndType(1, width));
+        row.ColumnDefinitions().Append(definition);
+    }
+    row.Children().Append(name);
+    row.Children().Append(bar);
+    row.Children().Append(state);
+    row.Children().Append(stop);
+
+    Shell* const shell = shell_;
+    stop.Click([shell, row](foundation::IInspectable const&, xaml::RoutedEventArgs const&) {
+        // The row carries its own index, so a recycled element cancels the file
+        // it is currently showing rather than the one it was made for.
+        shell->CancelRow(winrt::unbox_value<std::int32_t>(row.Tag()));
+    });
+
+    const auto index = winrt::unbox_value<std::int32_t>(args.Data());
+    row.Tag(winrt::box_value(index));
+    shell_->PopulateRow(row, index);
+    return row;
+}
+
+void RowFactory::RecycleElement(xaml::ElementFactoryRecycleArgs const&) {
+    // Nothing to release: a row owns no resources and is repopulated by index
+    // the next time it is handed out.
+}
+
+void Shell::PopulateRow(xaml::UIElement const& element, int index) const {
+    const auto row = element.as<controls::Grid>();
+    row.Tag(winrt::box_value(index));
+
+    const QueueRow& data = model_->rows()[static_cast<std::size_t>(index)];
+    row.Children().GetAt(0).as<controls::TextBlock>().Text(FileNameOf(data.inputPath));
+    row.Children().GetAt(1).as<controls::ProgressBar>().Value(data.fraction);
+
+    std::wstring state;
+    switch (data.state) {
+        case RowState::kPending:   state = data.cancelling ? L"stopping" : L"waiting"; break;
+        case RowState::kRunning:   state = data.cancelling ? L"stopping" : L"converting"; break;
+        case RowState::kSucceeded: state = L"done"; break;
+        // Section 11.3: cancelled and failed are different things, and users are
+        // the ones who know it.
+        case RowState::kCancelled: state = L"cancelled"; break;
+        case RowState::kFailed:    state = L"failed"; break;
+    }
+    row.Children().GetAt(2).as<controls::TextBlock>().Text(state);
+
+    // "Failures listed with a real reason, never 'conversion failed'." The row
+    // is one line, so the reason is the tooltip and the notes go with it.
+    std::wstring detail = Widen(data.inputPath);
+    if (!data.error.empty()) detail = Widen(data.error);
+    for (const FidelityNote& note : data.notes) {
+        detail += L"\n" + Widen(note.detail);
+    }
+    controls::ToolTipService::SetToolTip(row, winrt::box_value(detail));
+
+    const auto stop = row.Children().GetAt(3).as<controls::Button>();
+    stop.IsEnabled(!data.finished() && !data.cancelling);
+    stop.Visibility(data.finished() ? xaml::Visibility::Collapsed : xaml::Visibility::Visible);
+}
+
+void Shell::CancelRow(int index) {
+    model_->MarkCancelling(static_cast<std::size_t>(index));
+    RefreshRow(static_cast<std::size_t>(index));
+    if (const std::uint64_t job = model_->jobId(); job != 0) {
+        (void)client_.Cancel(job, index);
+    }
+}
+
+// IXamlMetadataProvider, implemented and empty.
+//
+// A generated WinUI app gets one from App.xaml.g.h and nobody thinks about it.
+// It is how the XAML parser resolves TYPE names, and the framework's own theme
+// dictionaries are parsed through it -- so without one, loading
+// XamlControlsResources fails on the first {ThemeResource} it meets and the
+// window goes down with it. There are no custom XAML types here, so every
+// answer is "I do not know that one", which is the correct answer.
 struct App : xaml::ApplicationT<App> {
-    void OnLaunched(xaml::LaunchActivatedEventArgs const&) { shell_.Start(); }
+
+    // Theme dictionary selection is what "cannot find a resource with the given
+    // key" actually means: every ThemeResource in generic.xaml lives under
+    // Light/Dark/HighContrast, and if no theme is chosen none of them resolve.
+    // An app with package identity gets one from the system; this one says so.
+    // Both of these are App.xaml in a generated project, and App.xaml is applied
+    // by InitializeComponent IN THE CONSTRUCTOR -- before the framework builds
+    // its theme context, not after. Doing the same work from OnLaunched is too
+    // late: the merge throws on the first {ThemeResource} it meets and takes the
+    // window with it.
+    App() {
+        Log("app: ctor");
+        RequestedTheme(xaml::ApplicationTheme::Dark);
+        try {
+            Resources().MergedDictionaries().Append(controls::XamlControlsResources{});
+            Log("app: resources merged");
+        } catch (winrt::hresult_error const& e) {
+            // UNRESOLVED, and the app opens anyway rather than dying in its own
+            // constructor. Everything built from primitives -- text, panels,
+            // borders -- still renders; the first TEMPLATED control (a Button, a
+            // ProgressBar) will not, because its default style reaches for a
+            // theme brush that is not there. See the note in winappsdk.cmake.
+            Log("app: XamlControlsResources unavailable: " + winrt::to_string(e.message()));
+        }
+    }
+
+    void OnLaunched(xaml::LaunchActivatedEventArgs const&) try {
+        shell_.Open(std::move(g_openWith));
+        shell_.Start();
+    } catch (winrt::hresult_error const& e) {
+        ::MessageBoxW(nullptr, e.message().c_str(), L"Morph failed to start", MB_ICONERROR);
+        throw;
+    }
 
 private:
     Shell shell_;
@@ -335,24 +919,46 @@ private:
 }  // namespace
 
 int __stdcall wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
-    // Unpackaged, so the Windows App Runtime has to be found and added to this
-    // process's package graph before any WinUI type can be activated. Packaged
-    // (the MSIX in section 13) this call is unnecessary and harmless.
+    // Every argument is a path. There are no switches and there will not be:
+    // section 3's design rule makes the app and the shell extension PEERS, and
+    // the place a capability belongs is the broker protocol and the worker's
+    // CLI, not a flag only this executable understands.
+    int count = 0;
+    if (LPWSTR* argv = ::CommandLineToArgvW(::GetCommandLineW(), &count)) {
+        for (int i = 1; i < count; ++i) g_openWith.push_back(Narrow(argv[i]));
+        ::LocalFree(argv);
+    }
+
+    // Whether this process has package identity, which decides everything below.
     //
-    // 2.x with no minimum: the app is built against the 2.0 headers and runs on
-    // whatever 2.x servicing release the machine has, which is the versioning
-    // the framework package is designed around.
-    constexpr UINT32 kMajorMinor = 0x00020000;
-    PACKAGE_VERSION noMinimum{};
-    if (FAILED(::MddBootstrapInitialize2(kMajorMinor, L"", noMinimum,
-                                         MddBootstrapInitializeOptions_OnNoMatch_ShowUI))) {
-        // The bootstrapper has already shown the user where to get the runtime.
-        return 1;
+    // UNPACKAGED, the Windows App Runtime has to be found and added to the
+    // package graph by hand before any WinUI type can be activated. PACKAGED,
+    // the deployment stack has already done it from the manifest's
+    // PackageDependency, and calling the bootstrapper is not merely unnecessary
+    // -- it FAILS, and the app exits before it has run a line of its own code:
+    // no window, no message, nothing written anywhere. That is an afternoon,
+    // and it is why this check is here rather than an unconditional call.
+    UINT32 length = 0;
+    const bool packaged = ::GetCurrentPackageFullName(&length, nullptr) != APPMODEL_ERROR_NO_PACKAGE;
+
+    if (!packaged) {
+        // The version comes from the build, not from a constant here, because it
+        // has to be the same line the headers and the .winmd files came from
+        // (winappsdk.cmake says why). Any servicing release of that line will
+        // do, which is the versioning the framework package is designed around.
+        constexpr UINT32 kMajorMinor = MORPH_WINAPPSDK_MAJORMINOR;
+        PACKAGE_VERSION noMinimum{};
+        if (FAILED(::MddBootstrapInitialize2(kMajorMinor, L"", noMinimum,
+                                             MddBootstrapInitializeOptions_OnNoMatch_ShowUI))) {
+            // The bootstrapper has already shown the user where to get the
+            // runtime.
+            return 1;
+        }
     }
 
     winrt::init_apartment(winrt::apartment_type::single_threaded);
     xaml::Application::Start([](auto&&) { winrt::make<App>(); });
 
-    ::MddBootstrapShutdown();
+    if (!packaged) ::MddBootstrapShutdown();
     return 0;
 }

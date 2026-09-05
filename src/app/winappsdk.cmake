@@ -39,9 +39,17 @@ set(MORPH_NUGET_PACKAGES "$ENV{USERPROFILE}/.nuget/packages"
 # Read together with the versions the runtime bootstrapper will be asked for in
 # main.cpp. The SDK splits into sub-packages that version independently, which is
 # why there are four numbers here rather than one.
-set(MORPH_WINAPPSDK_WINUI_VERSION       "2.0.12"        CACHE STRING "Microsoft.WindowsAppSDK.WinUI")
-set(MORPH_WINAPPSDK_FOUNDATION_VERSION  "2.0.20"        CACHE STRING "Microsoft.WindowsAppSDK.Foundation")
-set(MORPH_WINAPPSDK_INTERACTIVE_VERSION "2.0.12"        CACHE STRING "Microsoft.WindowsAppSDK.InteractiveExperiences")
+set(MORPH_WINAPPSDK_WINUI_VERSION       "1.8.260204000" CACHE STRING "Microsoft.WindowsAppSDK.WinUI")
+set(MORPH_WINAPPSDK_FOUNDATION_VERSION  "1.8.260203002" CACHE STRING "Microsoft.WindowsAppSDK.Foundation")
+set(MORPH_WINAPPSDK_INTERACTIVE_VERSION "1.8.260125001" CACHE STRING "Microsoft.WindowsAppSDK.InteractiveExperiences")
+
+# The runtime the bootstrapper asks for, as the packed major/minor the API takes:
+# 0x00010008 is 1.8, 0x00020000 is 2.0. It MUST match the line the versions above
+# come from. Building against one line's headers and resolving another's
+# framework package is not a link error and not a crash at startup either -- it
+# is XamlControlsResources failing to find a theme brush that was renamed between
+# them, which reads as a bug in the app.
+set(MORPH_WINAPPSDK_MAJORMINOR "0x00010008" CACHE STRING "Windows App Runtime major.minor, packed")
 set(MORPH_CPPWINRT_VERSION              "2.0.250303.1"  CACHE STRING "Microsoft.Windows.CppWinRT")
 set(MORPH_WEBVIEW2_NUGET_VERSION        "1.0.3719.77"   CACHE STRING "Microsoft.Web.WebView2")
 
@@ -116,6 +124,19 @@ function(morph_find_winappsdk out)
     # process dies before main with no message at all.
     set(MORPH_WINAPPSDK_DLL
         "${foundation}/runtimes/win-x64/native/Microsoft.WindowsAppRuntime.Bootstrap.dll"
+        PARENT_SCOPE)
+
+    # The framework's own resource indexes, which go BESIDE the executable rather
+    # than into a resources.pri of ours. That is what the SDK's own MSBuild
+    # targets do -- Microsoft.WinUI.References.targets copies "$(_WinUIDllDir)*.pri"
+    # to the output directory and merges nothing -- and it took an afternoon of
+    # makepri to find out, because without them every templated control fails to
+    # resolve its theme brushes and takes the window down on the first layout
+    # pass.
+    set(MORPH_WINAPPSDK_PRI
+        "${winui}/runtimes-framework/win-x64/native/Microsoft.UI.Xaml.Controls.pri"
+        "${interactive}/runtimes-framework/win-x64/native/Microsoft.UI.pri"
+        "${foundation}/runtimes-framework/win-x64/native/Microsoft.WindowsAppRuntime.pri"
         PARENT_SCOPE)
     set(MORPH_CPPWINRT_EXE "${cppwinrt}" PARENT_SCOPE)
     set(${out} TRUE PARENT_SCOPE)
