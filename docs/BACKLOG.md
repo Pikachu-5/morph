@@ -19,12 +19,12 @@ where the project is without reading the rest of the file.
 | Group | Open | Done | Total | What it is |
 |---|---:|---:|---:|---|
 | **A** — packaging and distribution (§13) | 4 | 3 | 7 | The last milestone |
-| **B** — features the architecture asks for | 8 | 1 | 9 | Not built yet |
-| **C** — built, and known to be imperfect | 4 | 1 | 5 | Defects and priced limits |
+| **B** — features the architecture asks for | 5 | 5 | 10 | Not built yet |
+| **C** — built, and known to be imperfect | 3 | 4 | 7 | Defects and priced limits |
 | **D** — deliberately out of scope | — | — | 7 | **Must stay undone** |
 | **E** — open questions (§20) | 2 | 1 | 3 | Decisions, not code |
 | **F** — measurement and test gaps (§16, §17) | 8 | 0 | 8 | The gates with holes in them |
-| | **26** | **6** | **39** | |
+| | **22** | **13** | **42** | |
 
 **Blocked on a decision, not on effort:** A5, A6, A7 all wait on E1 (the name),
 because the signing certificate's subject has to match the package identity.
@@ -32,8 +32,9 @@ because the signing certificate's subject has to match the package identity.
 **Estimates in this file are for a human developer.** They were written that way
 and are kept that way; do not read them as a session budget.
 
-Status: M0–M11 complete, M3 complete, M12 mostly done. 448 tests green in
-`x64-debug`, `x64-release` and under AddressSanitizer.
+Status: M0–M11 complete, M3 complete, M12 mostly done. 465 tests green in
+`x64-debug`; the release and sanitiser configurations are run before a
+milestone rather than on every edit.
 
 ---
 
@@ -69,13 +70,14 @@ broker *through* the package (`Start-Process 'shell:AppsFolder\<PFN>!Morph'`).
 |---|---|---|---|---|---|
 | B1 | Generic menu entry launches the app with the selection | **done** | `src/shellext/launch.h` builds the command line, tested against the real `CommandLineToArgvW`; too long is refused, not truncated. | 9.2 | |
 | B2 | Options and presets in the app | open | `AppModel::BuildJob` always sends an empty option bag. The whole provider option surface is `png.filter`, `quality`, `landscape`. | 2 | ~3–4 days |
-| B3 | Output policy UI | open | Destination folder, naming template, overwrite rule. Settable on `AppModel::output()`, no UI behind it. | 12.2, 10.2 | ~1 day |
+| B3 | Output policy UI | **done** | Destination, naming template and overwrite rule, behind an Expander with an always-visible preview line. `ApplyTemplate` moved to the core so the preview and the broker's real answer come from one implementation; `NamingTemplateWarning` is new. | 12.2, 10.2 | |
 | B4 | Store deep link when a codec is missing | open | A `kMissingCapability` result should become a button that opens the *codec* in the Store, not an error message. Not our storefront — Microsoft's codec packs. | 6.2 | ~half a day |
 | B5 | Use tagged PDF structure when present | open | `pdf_reader.cpp:501` detects tagging and emits a `pdf-tagging-unused` note saying structure was inferred from layout. PDFium exposes the tree (19 `FPDF_StructElement_*` calls); the cost is mapping it without regressing the layout path, and PDF fidelity is the worst thing to verify. | 8.7 | ~3 days |
 | B6 | HTML writer: directory-with-assets output mode | open | Always self-contained (images as data URIs). §8.5 asks for a choice. | 8.5 | ~1 day |
-| B7 | Title bar drag rectangles | open | §12.1: *"Set drag rectangles from the actual layout, not hardcoded — they must be recomputed on resize and on DPI change or the window becomes undraggable."* `main.cpp:223` extends content into the title bar and then sets neither `SetDragRectangles` nor `Window.SetTitleBar()`. | 12.1 | ~1 hour |
-| B8 | Fidelity badge explains on click | open | §12.2: *"Clicking a badge explains… what will be lost."* `main.cpp:462` sets a tooltip and an automation name. Hover and screen reader reach it; touch does not. | 12.2 | ~1 hour |
+| B7 | Title bar drag rectangles | **done** | Computed from the real bounds of a drag element, in physical pixels via `RasterizationScale`, recomputed on resize and on `XamlRoot::Changed`. The strip carries the window title, which is also where §12.2's "aggregate progress in the title bar" became visible — with the content extended into it, the system draws no caption text. | 12.1 | |
+| B8 | Fidelity badge explains on click | **done** | The badge is its own `HyperlinkButton` with a flyout, a sibling of the target button rather than nested inside it — a button inside a button is a hit-testing argument nobody wins. The tooltip stays for the mouse. | 12.2 | |
 | B9 | Legacy `IContextMenu` path | open | §9.1 asks for it *"for Windows 10 and for the 'Show more options' menu on Windows 11."* §20.3 excused Windows 10; it did not excuse the Win11 secondary menu, where Morph is currently absent. | 9.1 | ~half a day |
+| B10 | Application manifest | **done** | There was none, for any executable, so every process was DPI **unaware** and Windows rendered the window at 96 DPI and bitmap-stretched it. `PerMonitorV2` (which B7 needs to be told about monitor changes at all) plus `longPathAware`, which §15.2 asked for and only `stream.cpp` was honouring. One manifest, all three executables. | 12.1, 15.2 | |
 
 **B2 has a constraint that shapes it.** §3: *"The app and the shell extension are
 peers, not layers. Every capability reachable from the UI is reachable from the
@@ -93,7 +95,9 @@ already carries `OptionValue`. The gap is provider declaration and discovery.
 | C1 | `MORPH-IR` offered as a conversion target | **done** | — | `QueryTargets` now applies the rule the published table always did: a node with no extension of its own is somewhere a plan passes through, not somewhere it can stop. |
 | C2 | DOCX continuation paragraphs not reconstructed | open | `tests/property/test_ir_roundtrip.cpp:313` | A list item holding two blocks comes back as an item, a paragraph, and a new list — Word expresses a continuation paragraph as list style + indent without numbering, and the reader closes the list instead. The property generator emits one block per item because of it; fixing this lifts that restriction too. |
 | C3 | Sub-lists at one depth cannot disagree | open (won't fix) | `docx_writer.cpp` | A level is one `w:lvl` for the whole tree. Declared with `list-level-markers-shared` / `list-level-start-shared`. A format limit, not a defect — listed so nobody re-derives it. |
-| C4 | The app links the whole provider table to probe | open | `src/app/main.cpp`, `FileProber` | §12.2 probes on drop; doing it in-process pulls WIC, Media Foundation and PDFium into the UI process. **The backlog used to say "one function to change" and that is wrong**: `kProbeFiles`/`kProbeResult` exist only broker↔worker, so the client contract needs two new message types, a broker handler and a client method. `AppModel`'s injected `Prober` is the seam. |
+| C4 | The app links the whole provider table to probe | **done** | `src/app/main.cpp`, `FileProber` | §12.2 probes on drop; doing it in-process pulls WIC, Media Foundation and PDFium into the UI process. **The backlog used to say "one function to change" and that is wrong**: `kProbeFiles`/`kProbeResult` exist only broker↔worker, so the client contract needs two new message types, a broker handler and a client method. `AppModel`'s injected `Prober` is the seam, and it held: the table is filled on the background thread and the Prober became a lookup. Measured after: pdfium and Media Foundation are gone from the UI process; windowscodecs remains, loaded by XAML for its own decoding. |
+| C6 | A file that could not be opened terminated the worker | **done** | `serve.cpp` | `ProbeAll` promised "an unreadable file is an empty string, not a missing element" and did not keep it: `FileSource` throws, nothing caught it, and unwinding past a joinable `std::thread` calls `std::terminate`. One file deleted between the drop and the probe killed the worker mid-batch. Reachable before C4 from the app's own prober, which had no guard either. |
+| C7 | The frame reader accepted a *range* of message tags | **done** | `frame.cpp` | `raw >= kHello && raw <= kRunTask` meant "whichever enumerator is numerically last". A new tag outside it decoded to `kInvalid` and was dropped **silently**, leaving the client waiting for a reply. It is a list of cases now. |
 | C5 | Dropping files mid-job starts a new selection | open (deliberate) | `AppModel::Drop` | A queue that grows while it runs is a different feature. Revisit if it annoys anyone. |
 
 ---
