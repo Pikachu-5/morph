@@ -30,6 +30,7 @@
 #include <microsoft.ui.xaml.window.h>
 
 #include <atomic>
+#include <cmath>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -40,6 +41,7 @@
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.ApplicationModel.DataTransfer.h>
+#include <winrt/Windows.Graphics.h>
 #include <winrt/Windows.Storage.h>
 #include <winrt/Windows.UI.h>
 #include <winrt/Microsoft.UI.h>
@@ -214,7 +216,7 @@ public:
             });
 
         window_ = xaml::Window{};
-        window_.Title(L"Morph");
+        SetWindowTitle(L"Morph");
 
         // Section 12.1: Mica is one property on the Window, and BaseAlt is the
         // tabbed variant -- there is no tab strip here, so this is the plain one.
@@ -225,6 +227,10 @@ public:
         titleBar.PreferredHeightOption(windowing::TitleBarHeightOption::Tall);
         titleBar.ButtonBackgroundColor(winrt::Windows::UI::Colors::Transparent());
         titleBar.ButtonInactiveBackgroundColor(winrt::Windows::UI::Colors::Transparent());
+        // Extending content into the title bar takes the drag region away with
+        // it. Section 12.1 is specific about what has to replace it, and
+        // RefreshTitleBar is that; without it the strip across the top looks
+        // like a title bar and cannot be used to move the window.
 
         // The HWND, for the one thing section 12.2 asks for that WinUI has no
         // API of its own for: taskbar progress.
@@ -236,6 +242,20 @@ public:
 
         BuildLayout();
         window_.Content(root_);
+
+        // Loaded, not here: XamlRoot is null until the tree is in a window, and
+        // RasterizationScale comes from XamlRoot. This is also the first time
+        // the strip has a width to measure.
+        root_.Loaded([this](foundation::IInspectable const&, xaml::RoutedEventArgs const&) {
+            RefreshTitleBar();
+            // A move to a monitor with a different scale changes the title bar
+            // height, both insets and the DIP-to-pixel ratio at once. All three
+            // are read again rather than scaled from the old ones.
+            if (const auto xamlRoot = root_.XamlRoot()) {
+                xamlRoot.Changed({this, &Shell::OnXamlRootChanged});
+            }
+        });
+
         window_.Activate();
 
         // Connecting starts a broker, which starts a worker, which describes the
@@ -270,12 +290,140 @@ private:
         root_.DragOver({this, &Shell::OnDragOver});
         root_.Drop({this, &Shell::OnDrop});
 
+        BuildTitleBar();
         BuildChooser();
         BuildQueue();
 
         root_.Children().Append(chooser_);
         root_.Children().Append(queue_);
+        // Last, so it is on top: the strip is the drag region and nothing below
+        // it should take a click that belongs to moving the window.
+        root_.Children().Append(titleBar_);
         ShowScreen();
+    }
+
+    // --- The title bar (section 12.1) ----------------------------------------
+    //
+    // "Set drag rectangles from the actual layout, not hardcoded -- they must be
+    // recomputed on resize and on DPI change or the window becomes undraggable."
+    //
+    // FROM THE ACTUAL LAYOUT is the part that costs something. It would be
+    // shorter to compute the rectangle from AppWindow::Size and the two insets,
+    // and it would be wrong the first time anything is put in the title bar,
+    // because a control inside a drag rectangle is dead: the system claims that
+    // area as caption and XAML never sees the pointer. So the strip is a real
+    // element, the drag region is a real element inside it, and the rectangle
+    // is whatever that element's bounds turn out to be.
+    //
+    // TWO COORDINATE SYSTEMS meet here, which is the whole of the DPI problem.
+    // AppWindowTitleBar's Height, LeftInset and RightInset are PHYSICAL pixels,
+    // and so is SetDragRectangles. XAML lays out in DIPs. The conversion is the
+    // XamlRoot's RasterizationScale, and every one of those numbers changes when
+    // the window moves to a monitor with a different scale -- which is why this
+    // runs again on XamlRoot::Changed and not only on resize.
+    void BuildTitleBar() {
+        // Not the window title. With the content extended into the title bar
+        // the system draws no caption text at all, so section 12.2's "aggregate
+        // progress in the title bar" was going to the taskbar and to alt-tab and
+        // nowhere the user was looking. This is where it becomes visible.
+        titleText_ = controls::TextBlock{};
+        titleText_.Text(L"Morph");
+        titleText_.FontSize(12);
+        titleText_.Opacity(0.8);
+        titleText_.VerticalAlignment(xaml::VerticalAlignment::Center);
+        titleText_.Margin(xaml::ThicknessHelper::FromLengths(16, 0, 0, 0));
+        // A TextBlock is safe inside a drag rectangle because it wants no input.
+        // Anything that does -- a settings button, a search box -- has to sit
+        // OUTSIDE dragRegion_, in its own column, or it will not respond.
+        titleText_.IsHitTestVisible(false);
+
+        dragRegion_ = controls::Grid{};
+        dragRegion_.Children().Append(titleText_);
+        // SizeChanged rather than the window's: this fires after the strip has
+        // been laid out at its new size, so ActualWidth is the number we want
+        // rather than the previous one.
+        dragRegion_.SizeChanged({this, &Shell::OnDragRegionResized});
+
+        titleBar_ = controls::Grid{};
+        titleBar_.VerticalAlignment(xaml::VerticalAlignment::Top);
+        titleBar_.Children().Append(dragRegion_);
+    }
+
+    // The strip's height and the room left for the caption buttons, in DIPs.
+    void ApplyTitleBarMetrics() {
+        if (!window_ || !titleBar_) return;
+        const auto appWindow = window_.AppWindow();
+        if (!appWindow) return;
+        const auto bar = appWindow.TitleBar();
+
+        const auto xamlRoot = root_.XamlRoot();
+        const double scale = xamlRoot ? xamlRoot.RasterizationScale() : 1.0;
+        if (scale <= 0.0) return;
+
+        titleBar_.Height(static_cast<double>(bar.Height()) / scale);
+        // The caption buttons are drawn by the system on top of our content, and
+        // a drag rectangle underneath them would swallow their clicks. LeftInset
+        // is zero in a left-to-right layout and is not assumed to be.
+        dragRegion_.Margin(xaml::ThicknessHelper::FromLengths(
+            static_cast<double>(bar.LeftInset()) / scale, 0,
+            static_cast<double>(bar.RightInset()) / scale, 0));
+    }
+
+    void UpdateDragRectangles() {
+        if (!window_ || !dragRegion_) return;
+        const auto appWindow = window_.AppWindow();
+        if (!appWindow) return;
+        const auto bar = appWindow.TitleBar();
+        if (!bar.ExtendsContentIntoTitleBar()) return;
+
+        const auto xamlRoot = dragRegion_.XamlRoot();
+        if (!xamlRoot) return;  // not in a tree yet; Loaded will come back here
+        const double scale = xamlRoot.RasterizationScale();
+        if (scale <= 0.0) return;
+
+        const double width = dragRegion_.ActualWidth();
+        const double height = dragRegion_.ActualHeight();
+        // A zero-sized region is not "no drag region", it is a layout that has
+        // not happened. Publishing an empty rectangle for it would leave the
+        // window undraggable until the next resize.
+        if (width <= 0.0 || height <= 0.0) return;
+
+        const auto origin =
+            dragRegion_.TransformToVisual(nullptr).TransformPoint(foundation::Point{0, 0});
+
+        const winrt::Windows::Graphics::RectInt32 rectangle{
+            static_cast<std::int32_t>(std::lround(origin.X * scale)),
+            static_cast<std::int32_t>(std::lround(origin.Y * scale)),
+            static_cast<std::int32_t>(std::lround(width * scale)),
+            static_cast<std::int32_t>(std::lround(height * scale))};
+        bar.SetDragRectangles({&rectangle, &rectangle + 1});
+    }
+
+    void RefreshTitleBar() {
+        ApplyTitleBarMetrics();
+        // Changing the height and the margins above schedules a layout pass;
+        // the rectangle is taken from the result of it in OnDragRegionResized.
+        // Doing it here as well covers the case where nothing actually moved and
+        // no SizeChanged is raised.
+        UpdateDragRectangles();
+    }
+
+    void OnDragRegionResized(foundation::IInspectable const&,
+                             xaml::SizeChangedEventArgs const&) {
+        UpdateDragRectangles();
+    }
+
+    void OnXamlRootChanged(xaml::XamlRoot const&, xaml::XamlRootChangedEventArgs const&) {
+        RefreshTitleBar();
+    }
+
+    // Both, always. The window title is what the taskbar and alt-tab show; the
+    // TextBlock is what the user is actually looking at. Section 12.2 asks for
+    // progress "in the title bar", and with the content extended into it those
+    // stopped being the same place.
+    void SetWindowTitle(std::wstring text) {
+        if (window_) window_.Title(text);
+        if (titleText_) titleText_.Text(text);
     }
 
     // The drop zone and the target picker are one panel, because they are one
@@ -437,42 +585,84 @@ private:
                 group.Children().Append(row);
                 groups_.Children().Append(group);
             }
-            row.Children().Append(TargetButton(choice));
+            row.Children().Append(TargetEntry(choice));
         }
     }
 
-    [[nodiscard]] controls::Button TargetButton(const TargetChoice& choice) {
+    // One target: the button that chooses it, and under it the badge that
+    // explains what choosing it costs.
+    //
+    // THE BADGE IS ITS OWN CONTROL, and that is section 12.2 read literally:
+    // "Clicking a badge explains, in one sentence, what will be lost." It used
+    // to be a TextBlock inside the button with the sentence on a tooltip, which
+    // is not clicking and, more to the point, is not reachable at all by touch
+    // -- there is no hover on a touchscreen, so the explanation simply did not
+    // exist for anyone using one.
+    //
+    // It is a sibling rather than a control nested inside the button, because a
+    // button inside a button is a hit-testing argument nobody wins: the inner
+    // one swallows the click on some paths and the outer one fires on others,
+    // and which happens depends on the theme's visual tree. Two controls that
+    // each do one thing cannot get that wrong.
+    [[nodiscard]] controls::StackPanel TargetEntry(const TargetChoice& choice) {
+        const std::wstring explanation = Widen(std::string(choice.Explanation()));
+
         controls::TextBlock label;
         label.Text(Widen(choice.label));
         label.HorizontalAlignment(xaml::HorizontalAlignment::Center);
 
-        controls::TextBlock badge;
-        badge.Text(BadgeFor(choice));
-        badge.FontSize(11);
-        badge.Opacity(0.65);
-        badge.HorizontalAlignment(xaml::HorizontalAlignment::Center);
-
-        controls::StackPanel content;
-        content.Children().Append(label);
-        content.Children().Append(badge);
-
         controls::Button button;
-        button.Content(content);
+        button.Content(label);
         button.MinWidth(120);
-        // "Clicking a badge explains, in one sentence, what will be lost."
-        controls::ToolTipService::SetToolTip(
-            button, winrt::box_value(Widen(std::string(choice.Explanation()))));
-        // A button whose Content is a PANEL has no name to read: the label and
-        // the badge are two TextBlocks, and a screen reader announces neither.
-        // The format alone is the name; the badge is the description, which is
-        // the same split the tooltip makes.
+        button.HorizontalAlignment(xaml::HorizontalAlignment::Stretch);
+        // Hover still works and is the fastest way to read it with a mouse. The
+        // badge below is what makes it reachable without one.
+        controls::ToolTipService::SetToolTip(button, winrt::box_value(explanation));
         xaml::Automation::AutomationProperties::SetName(button, Widen(choice.label));
-        xaml::Automation::AutomationProperties::SetHelpText(
-            button, Widen(std::string(choice.Explanation())));
-
+        xaml::Automation::AutomationProperties::SetHelpText(button, explanation);
         button.Tag(winrt::box_value(Widen(choice.profile)));
         button.Click({this, &Shell::OnChoose});
-        return button;
+
+        controls::TextBlock badgeText;
+        badgeText.Text(BadgeFor(choice));
+        badgeText.FontSize(11);
+        badgeText.Opacity(0.65);
+
+        controls::TextBlock explanationText;
+        explanationText.Text(explanation);
+        explanationText.TextWrapping(xaml::TextWrapping::Wrap);
+        explanationText.MaxWidth(260);
+
+        controls::Flyout flyout;
+        flyout.Content(explanationText);
+
+        // A HyperlinkButton rather than a Button: the badge is a thing to read
+        // that happens to be clickable, and a second chrome-heavy button under
+        // every target would compete with the target itself. Padding stripped
+        // for the same reason.
+        controls::HyperlinkButton badge;
+        badge.Content(badgeText);
+        // HyperlinkButton has no Flyout property of its own -- that is Button's.
+        // Showing it from the click is the same gesture and one less style to
+        // fight with.
+        badge.Click([flyout](foundation::IInspectable const& sender,
+                             xaml::RoutedEventArgs const&) {
+            if (const auto anchor = sender.try_as<xaml::FrameworkElement>()) {
+                flyout.ShowAt(anchor);
+            }
+        });
+        badge.Padding(xaml::ThicknessHelper::FromLengths(0, 0, 0, 0));
+        badge.HorizontalAlignment(xaml::HorizontalAlignment::Center);
+        // Without this a screen reader reads the badge's four words and stops.
+        // The four words are the summary; the sentence is the point of clicking.
+        xaml::Automation::AutomationProperties::SetName(badge, BadgeFor(choice));
+        xaml::Automation::AutomationProperties::SetHelpText(badge, explanation);
+
+        controls::StackPanel entry;
+        entry.Spacing(2);
+        entry.Children().Append(button);
+        entry.Children().Append(badge);
+        return entry;
     }
 
     void ShowQueue() {
@@ -516,14 +706,14 @@ private:
                 summary += ", " + std::to_string(model_->cancelled()) + " cancelled";
             }
             queueHeading_.Text(Widen(summary));
-            window_.Title(L"Morph");
+            SetWindowTitle(L"Morph");
         } else {
             const int percent = static_cast<int>(fraction * 100.0 + 0.5);
             queueHeading_.Text(Widen(std::to_string(model_->succeeded() + model_->failed() +
                                                     model_->cancelled()) +
                                      " of " + std::to_string(model_->rows().size()) + " done"));
             // "aggregate progress in the title bar and on the taskbar"
-            window_.Title(Widen(std::to_string(percent) + "% · Morph"));
+            SetWindowTitle(Widen(std::to_string(percent) + "% · Morph"));
         }
 
         if (taskbar_ && hwnd_ != nullptr) {
@@ -644,7 +834,7 @@ private:
         if (taskbar_ && hwnd_ != nullptr) {
             (void)taskbar_->SetProgressState(hwnd_, TBPF_NOPROGRESS);
         }
-        window_.Title(L"Morph");
+        SetWindowTitle(L"Morph");
         ShowScreen();
         ShowChooser();
     }
@@ -722,6 +912,10 @@ private:
 
     xaml::Window window_{nullptr};
     controls::Grid root_{nullptr};
+
+    controls::Grid titleBar_{nullptr};
+    controls::Grid dragRegion_{nullptr};
+    controls::TextBlock titleText_{nullptr};
 
     controls::StackPanel chooser_{nullptr};
     controls::TextBlock heading_{nullptr};
