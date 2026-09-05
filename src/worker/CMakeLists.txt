@@ -29,6 +29,8 @@ add_executable(morph_worker
     serve.cpp
 )
 
+morph_apply_manifest(morph_worker)
+
 target_link_libraries(morph_worker PRIVATE morph::providers)
 
 set_target_properties(morph_worker PROPERTIES

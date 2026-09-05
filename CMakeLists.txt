@@ -111,6 +111,22 @@ if(MORPH_ASAN AND MSVC)
         _DISABLE_VECTOR_ANNOTATION=1)
 endif()
 
+# --- The application manifest ------------------------------------------------
+#
+# Embedded in all three executables. See packaging/morph.manifest for what is in
+# it and why; the short version is that a process without one is DPI unaware and
+# Windows renders it at 96 DPI and stretches the result.
+#
+# MSVC's linker takes a manifest as an ordinary source file and embeds it, so
+# there is no mt.exe step and nothing to keep in step by hand.
+set(MORPH_APP_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/packaging/morph.manifest")
+
+function(morph_apply_manifest target)
+    if(MSVC)
+        target_sources(${target} PRIVATE "${MORPH_APP_MANIFEST}")
+    endif()
+endfunction()
+
 # --- Components --------------------------------------------------------------
 add_subdirectory(src/core)
 add_subdirectory(src/providers)

@@ -25,6 +25,7 @@ target_link_libraries(morph_broker_core PUBLIC morph::core morph::settings)
 set_target_properties(morph_broker_core PROPERTIES FOLDER "processes")
 
 add_executable(morph_broker main.cpp)
+morph_apply_manifest(morph_broker)
 
 target_link_libraries(morph_broker PRIVATE morph::broker)
 

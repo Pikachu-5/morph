@@ -49,6 +49,7 @@ set(MORPH_CPPWINRT_DIR "${CMAKE_CURRENT_BINARY_DIR}/winrt")
 morph_generate_cppwinrt(morph_app_projection "${MORPH_CPPWINRT_DIR}")
 
 add_executable(morph_app WIN32 main.cpp)
+morph_apply_manifest(morph_app)
 add_dependencies(morph_app morph_app_projection)
 
 target_include_directories(morph_app PRIVATE

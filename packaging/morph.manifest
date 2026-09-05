@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The side-by-side application manifest, embedded in every Morph executable.
+
+  THIS FILE IS THE REASON THE TEXT IS SHARP. Without a manifest a process is
+  DPI UNAWARE, and Windows deals with that by rendering the window at 96 DPI
+  into a bitmap and stretching it to whatever the monitor actually is. On a
+  150% display every glyph in the app goes through a 1.5x bilinear scale on the
+  way to the screen, which is exactly as blurry as it sounds. Nothing in the
+  code can compensate: the process never finds out the real scale, so XAML lays
+  out correctly for a resolution that is not the one being displayed.
+
+  WinUI needs PerMonitorV2 specifically, not merely "aware". Section 12.1 has
+  the app recomputing title bar drag rectangles on DPI change, and a
+  system-aware process is never told about one. It is told the scale at startup
+  and lied to afterwards, which turns a monitor change into a window whose drag
+  region is in the wrong place.
+
+  longPathAware is section 15.2's first clause. The IO path does not depend on
+  it, because stream.cpp prefixes its own extended-length paths and that works
+  regardless, but plenty of std::filesystem calls elsewhere (exists,
+  create_directories, file_size) go to Win32 without a prefix, and those are the
+  ones that fail at 260 characters.
+
+  It is one manifest for all three executables rather than one each. The broker
+  and the worker have no windows, so the DPI clauses do nothing there; keeping a
+  single file means the long-path clause cannot be added to one and forgotten in
+  another, which is the failure the two AppxManifests already taught us once.
+
+  Note for anyone editing: an XML comment may not contain a double hyphen, and
+  this repository writes em dashes that way everywhere else. That is why this
+  block does not.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="Morph" version="1.0.0.0"/>
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <!-- The modern spelling. Windows 10 1703 and later read this one. -->
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+      <!-- The older one, for anything that reads it first. "true/pm" degrades
+           to per-monitor v1 rather than to unaware, which is the point. -->
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10 and 11. Without a supportedOS entry the OS reports itself
+           as 6.2 to version checks and applies Windows 8 compatibility
+           shimming, which brings its own DPI behaviour with it. -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+</assembly>
