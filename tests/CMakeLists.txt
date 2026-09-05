@@ -29,6 +29,8 @@ add_executable(morph_tests
     unit/test_broker_output.cpp
     unit/test_capability_table.cpp
     unit/test_shell_menu.cpp
+    unit/test_app_model.cpp
+    unit/test_app_client.cpp
     unit/test_broker_scheduling.cpp
     property/test_ir_roundtrip.cpp
     integration/test_broker_end_to_end.cpp
@@ -43,6 +45,7 @@ target_link_libraries(morph_tests PRIVATE
     morph::core
     morph::broker
     morph::shellext::core
+    morph::app::core
     morph::provider::docmd
     morph::provider::dochtml
     morph::provider::docooxml

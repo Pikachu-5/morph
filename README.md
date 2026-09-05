@@ -38,11 +38,11 @@ Pre-M0. What exists today:
 | IR round-trip property tests (§16) | Implemented |
 | Fuzz targets and the hostile-input corpus (§15, §16) | Implemented |
 | Performance budgets, measured (§17) | Implemented, one budget missed |
-| `Morph.App.exe` | Not started |
+| `Morph.App.exe` — the four screens of §12.2, without the window | Implemented, XAML shell not started |
 
-411 tests green (`ctest --preset x64-debug`), including one that starts the
+439 tests green (`ctest --preset x64-debug`), including one that starts the
 broker, lets it start a worker, and converts a real file over the real pipe. The
-same 411 pass under AddressSanitizer (`.\tools\build.ps1 -Preset x64-asan`),
+same 439 pass under AddressSanitizer (`.\tools\build.ps1 -Preset x64-asan`),
 which is the configuration the hostile-input corpus is worth running in.
 
 §16 calls the IR round-trip property test the one that "catches more real bugs
