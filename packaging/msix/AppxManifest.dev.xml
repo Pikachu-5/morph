@@ -3,16 +3,18 @@
 <!--
   Morph, the DEVELOPMENT manifest (architecture sections 12 and 13).
 
-  WHY A SECOND MANIFEST EXISTS. WinUI's theme dictionaries do not load for a
-  loose, unpackaged executable: XamlControlsResources throws, and the first
-  templated control in the tree (a Button, a ProgressBar) fails to resolve its
-  default style and takes the window down with it. Package identity is what
-  fixes that, and identity comes from a registered manifest.
+  WHY A SECOND MANIFEST EXISTS. Section 13 ships this packaged, and the shell
+  extension cannot be loaded by Explorer at all without package identity. This
+  file is how the app gets an identity during development, through
+  `Add-AppxPackage -Register` over the build output directory, so the packaged
+  path is exercised long before the packaging milestone rather than for the first
+  time at the end of it. It is NOT the shipping package: AppxManifest.xml next
+  door is, and the two must be kept in step by hand for as long as both exist.
 
-  So this file exists to give the app an identity during development, through
-  `Add-AppxPackage -Register` over the build output directory. It is NOT the
-  shipping package: AppxManifest.xml next door is, and the two must be kept in
-  step by hand for as long as both exist.
+  Running packaged is OPTIONAL. The app runs unpackaged too, and did before this
+  file existed; identity was tried as a fix for WinUI's theme resources failing
+  to load, which it is not (see the note above `struct App` in main.cpp). What
+  identity IS needed for is the shell extension, and eventually the Store.
 
   WHAT IS DELIBERATELY ABSENT is the whole of the shell extension: the
   com:Extension, the surrogate server, and the fileExplorerContextMenus entry.

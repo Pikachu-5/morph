@@ -289,6 +289,50 @@ TEST_CASE("The broker converts a file end to end", "[broker][integration]") {
         CHECK(std::filesystem::file_size(outcome.tasks[0].outputPath) > 0);
     }
 
+    SECTION("it converts a markdown file to pdf, which needs a subprocess") {
+        // THE POINT OF THIS CASE is not the PDF. It is that section 8.6's route
+        // starts a WEBVIEW2 inside the worker, and the worker lives in a job
+        // object -- so this is the only test that crosses the boundary between
+        // "the converter works" and "the converter works where the broker puts
+        // it".
+        //
+        // Nothing did, until the app was pointed at a Markdown file and asked
+        // for a PDF. The docx case above passes with an ActiveProcessLimit of
+        // one, because nothing it does starts a process; this one failed every
+        // time at four, while the same conversion through the worker's own CLI
+        // succeeded, because the CLI has no job object. A difference between two
+        // paths that no test crossed is a bug with nowhere to show up.
+        const std::filesystem::path input = WriteMarkdown("printable.md");
+        const std::filesystem::path expected = input.parent_path() / "printable.pdf";
+        std::error_code ec;
+        std::filesystem::remove(expected, ec);
+
+        ipc::SubmitJob submit;
+        submit.inputPaths = {input.string()};
+        submit.targetProfile = "application/pdf";
+        submit.interactive = true;
+        REQUIRE(connection.Send(submit));
+
+        const JobOutcome outcome = AwaitJob(connection);
+        INFO(outcome.protocolError);
+        REQUIRE(outcome.complete);
+        REQUIRE(outcome.tasks.size() == 1u);
+
+        INFO(outcome.tasks[0].error);
+        if (outcome.tasks[0].status ==
+            static_cast<std::uint8_t>(Status::kMissingCapability)) {
+            // Section 8.6: WebView2 is absent on some managed fleets and the
+            // edges are marked unavailable rather than failing mid-job. That is
+            // a machine without the runtime, not a broken broker.
+            SKIP("WebView2 is not installed on this machine");
+        }
+
+        CHECK(outcome.tasks[0].status == static_cast<std::uint8_t>(Status::kOk));
+        CHECK(outcome.done.succeeded == 1u);
+        CHECK(std::filesystem::exists(outcome.tasks[0].outputPath));
+        CHECK(std::filesystem::file_size(outcome.tasks[0].outputPath) > 0);
+    }
+
     SECTION("a file it cannot identify fails that task with a reason") {
         // Section 12.2: "Failures listed with a real reason, never 'conversion
         // failed'."

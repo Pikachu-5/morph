@@ -39,7 +39,7 @@ Pre-M0. What exists today:
 | Fuzz targets and the hostile-input corpus (§15, §16) | Implemented |
 | Performance budgets, measured (§17) | Implemented, one budget missed |
 | `Morph.App.exe` — four screens as a state machine (§12.2) | Implemented, tested without a window |
-| `Morph.App.exe` — the WinUI 3 shell (§12.1) | Drop zone and target picker; off by default |
+| `Morph.App.exe` — the WinUI 3 shell (§12.1, §12.2) | All four screens; off by default |
 
 439 tests green (`ctest --preset x64-debug`), including one that starts the
 broker, lets it start a worker, and converts a real file over the real pipe. The
@@ -120,15 +120,40 @@ in code needs the C++/WinRT projection and nothing else, and CMake runs
 XAML hot reload, both of which §12.3 had already written off; the gain is that
 §18's rule holds -- CI still drives the same script a developer does.
 
+A code-only WinUI app owes itself two things a generated project gets from
+App.xaml without anyone noticing, and it needs **both**: a real
+`IXamlMetadataProvider` on the application object, delegating to
+`XamlControlsXamlMetaDataProvider`, and `XamlControlsResources` merged in
+`OnLaunched` rather than in the constructor. Implementing the interface but
+answering `nullptr` is worse than not implementing it at all — it tells the XAML
+parser that no type exists, including the framework's own, and every templated
+control then fails to resolve its theme brushes. The symptom is a window that
+renders text and dies on its first `Button`.
+
 `Morph.App.exe` is `OFF` by default (`-DMORPH_BUILD_APP=ON`), because the Windows
 App SDK is currently read out of the local NuGet cache rather than fetched by a
 pinned, checksummed script the way PDFium is. That script, and the SDK's entry in
 §14's licence matrix, belong with the packaging milestone that has to write the
-same versions into the MSIX manifest anyway. What exists today is the shell:
-a Mica window with the tall extended title bar §12.1 specifies, the whole of it a
-drop target, which probes what is dropped and shows the targets the broker says
-those files can reach. The queue and done screens are modelled and tested but not
-yet drawn.
+same versions into the MSIX manifest anyway.
+
+All four of §12.2's screens are drawn: a Mica window with the tall extended title
+bar §12.1 specifies, the whole of it a drop target; a picker grouped by family
+with a fidelity badge and a hop count on every indirect route; a virtualised
+queue with per-row progress and per-row cancel, aggregate progress in the title
+bar and on the taskbar; and a done screen with the notes actually incurred and
+real reasons on the failures. Files named on the command line arrive the same way
+dropped ones do, which is what §9.2's degraded path needs. `packaging/msix`
+carries a development manifest so the packaged path §13 ships is exercised now
+rather than at the end.
+
+**M3's exit criterion is met** — drag files in, watch them convert — and the
+first thing it did was find a bug nothing else could. §11.2 caps a worker's job
+object at four processes, "worker + ffmpeg + slack", which forgets that §8.6 puts
+a WebView2 in that same worker: a browser is six processes before it renders
+anything. Every PDF conversion through the broker failed while the identical
+conversion through the worker's own CLI succeeded, because the CLI has no job
+object. The end-to-end test converted to DOCX and never crossed that boundary. It
+does now.
 
 ## Trying it
 
@@ -217,7 +242,10 @@ follows, and the code enforces each one:
 | §20.3 Windows 10 | Windows 11 only. Enforced by `NTDDI_VERSION=0x0A00000C` in the shared compile settings; no legacy `IContextMenu` path and no acrylic fallback. |
 | Build order | M0 skeleton, with the format graph built into `morph.core` first — the section 20 closing advice ("build the format graph and the fidelity contract before building any converter") applied inside M0's scope. |
 
-One correction to the document is implemented in
+Three corrections to the document are implemented rather than argued. §18 says
+the WinUI project "needs MSBuild"; it does not, and `Morph.App.exe` builds under
+Ninja with the rest. §11.2's `ActiveProcessLimit = 4` is incompatible with §8.6's
+WebView2, as described above. And the third is in
 [`planner.cpp`](src/core/src/graph/planner.cpp): section 4.2 specifies
 lexicographic path comparison and then prescribes a single Dijkstra run over it.
 Those are incompatible. `worstFidelity` folds with `max()`, which is not monotone

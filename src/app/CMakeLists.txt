@@ -84,14 +84,11 @@ add_custom_command(TARGET morph_app POST_BUILD
 # The development manifest and its assets, so the build output is a loose
 # package layout that `Add-AppxPackage -Register` accepts as it stands.
 #
-# Package identity is not a nicety here. WinUI's theme dictionaries do not load
-# for a loose unpackaged executable -- XamlControlsResources throws, and the
-# first templated control in the tree fails to resolve its default style and
-# takes the window down. Everything built from primitives renders without it,
-# which is why a window with nothing but text in it looked like it worked.
-#
-# The manifest registered here deliberately does NOT carry the shell extension:
-# see packaging/msix/AppxManifest.dev.xml for why.
+# Staged on every build, registered by hand and only when wanted: the app runs
+# unpackaged, and section 13's packaged path is exercised early rather than for
+# the first time at the end of the packaging milestone. The manifest staged here
+# deliberately does NOT carry the shell extension -- see
+# packaging/msix/AppxManifest.dev.xml for why.
 add_custom_command(TARGET morph_app POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${PROJECT_SOURCE_DIR}/packaging/msix/AppxManifest.dev.xml"

@@ -30,7 +30,6 @@
 #include <microsoft.ui.xaml.window.h>
 
 #include <atomic>
-#include <cstdio>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -52,10 +51,12 @@
 // RangeBase and ButtonBase live here, and ProgressBar::Value and Button::Click
 // are inherited from them -- so without this the projection compiles but every
 // use of either is "a function that returns auto used before it is defined".
+#include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Microsoft.UI.Xaml.Markup.h>
 #include <winrt/Microsoft.UI.Xaml.Interop.h>
 #include <winrt/Microsoft.UI.Xaml.Media.h>
+#include <winrt/Microsoft.UI.Xaml.XamlTypeInfo.h>
 
 #include "app/client.h"
 #include "app/model.h"
@@ -71,22 +72,6 @@ using namespace morph;
 using namespace morph::app;
 
 namespace {
-
-// TEMPORARY diagnostic scaffolding. Beside the executable rather than in the
-// working directory, because a packaged activation does not have one worth
-// writing to.
-void Log(std::string_view line) {
-    wchar_t module[MAX_PATH] = {};
-    ::GetModuleFileNameW(nullptr, module, MAX_PATH);
-    std::filesystem::path path(module);
-    path.replace_filename(L"morph-app.log");
-
-    FILE* f = nullptr;
-    if (_wfopen_s(&f, path.c_str(), L"a") == 0 && f != nullptr) {
-        fprintf(f, "%.*s\n", static_cast<int>(line.size()), line.data());
-        fclose(f);
-    }
-}
 
 std::wstring Widen(std::string_view text) {
     if (text.empty()) return {};
@@ -217,19 +202,22 @@ public:
         providers_ = std::make_shared<worker::Providers>();
         model_ = std::make_unique<AppModel>(FileProber{providers_});
 
+        // A XAML exception raised on the dispatcher after startup reaches no
+        // try/catch anywhere -- the process simply exits, with no window and
+        // nothing written down, which is a genuinely hard thing to debug from
+        // the outside. Saying what it was costs one message box.
         xaml::Application::Current().UnhandledException(
             [](foundation::IInspectable const&,
                xaml::UnhandledExceptionEventArgs const& args) {
-                Log("UNHANDLED: " + winrt::to_string(args.Message()));
+                ::MessageBoxW(nullptr, args.Message().c_str(), L"Morph stopped",
+                              MB_ICONERROR | MB_OK);
             });
 
-        Log("step: window");
         window_ = xaml::Window{};
         window_.Title(L"Morph");
 
         // Section 12.1: Mica is one property on the Window, and BaseAlt is the
         // tabbed variant -- there is no tab strip here, so this is the plain one.
-        Log("step: mica");
         window_.SystemBackdrop(xaml::Media::MicaBackdrop{});
 
         auto titleBar = window_.AppWindow().TitleBar();
@@ -240,24 +228,19 @@ public:
 
         // The HWND, for the one thing section 12.2 asks for that WinUI has no
         // API of its own for: taskbar progress.
-        Log("step: hwnd");
         if (const auto native = window_.try_as<::IWindowNative>()) {
             native->get_WindowHandle(&hwnd_);
         }
         (void)::CoCreateInstance(CLSID_TaskbarList, nullptr, CLSCTX_INPROC_SERVER,
                                  IID_PPV_ARGS(taskbar_.put()));
 
-        Log("step: buildlayout");
         BuildLayout();
-        Log("step: content");
         window_.Content(root_);
-        Log("step: activate");
         window_.Activate();
 
         // Connecting starts a broker, which starts a worker, which describes the
         // graph. None of that belongs on the thread painting the window.
         std::thread([this] { Connect(); }).detach();
-        Log("step: connect thread started");
     }
 
     // Probes whatever the command line named, once there is a broker to ask
@@ -287,14 +270,11 @@ private:
         root_.DragOver({this, &Shell::OnDragOver});
         root_.Drop({this, &Shell::OnDrop});
 
-        Log("step: buildchooser");
         BuildChooser();
-        Log("step: buildqueue");
         BuildQueue();
 
         root_.Children().Append(chooser_);
         root_.Children().Append(queue_);
-        Log("step: showscreen");
         ShowScreen();
     }
 
@@ -482,6 +462,14 @@ private:
         // "Clicking a badge explains, in one sentence, what will be lost."
         controls::ToolTipService::SetToolTip(
             button, winrt::box_value(Widen(std::string(choice.Explanation()))));
+        // A button whose Content is a PANEL has no name to read: the label and
+        // the badge are two TextBlocks, and a screen reader announces neither.
+        // The format alone is the name; the badge is the description, which is
+        // the same split the tooltip makes.
+        xaml::Automation::AutomationProperties::SetName(button, Widen(choice.label));
+        xaml::Automation::AutomationProperties::SetHelpText(
+            button, Widen(std::string(choice.Explanation())));
+
         button.Tag(winrt::box_value(Widen(choice.profile)));
         button.Click({this, &Shell::OnChoose});
         return button;
@@ -552,19 +540,14 @@ private:
     // --- The broker ----------------------------------------------------------
 
     void Connect() {
-        Log("connect: begin");
         const Result connected = client_.Connect();
-        Log("connect: returned " + std::string(connected.ok() ? "ok" : connected.message()));
         Post([this, connected] {
-            Log("connect: on ui thread");
             ready_ = connected.ok();
             // Never "connection failed": section 12.2 wants the reason, and
             // BrokerClient already carries one worth reading.
             readyMessage_ = connected.ok() ? "Ready." : connected.message();
             if (model_->screen() == Screen::kDropZone) ShowChooser();
-            Log("connect: chooser shown");
             OpenPending();
-            Log("connect: pending opened");
         });
     }
 
@@ -869,42 +852,42 @@ void Shell::CancelRow(int index) {
     }
 }
 
-// IXamlMetadataProvider, implemented and empty.
+// THE TWO THINGS A CODE-ONLY WinUI APP HAS TO DO ITSELF, both of which a
+// generated project gets from App.xaml and nobody ever thinks about.
 //
-// A generated WinUI app gets one from App.xaml.g.h and nobody thinks about it.
-// It is how the XAML parser resolves TYPE names, and the framework's own theme
-// dictionaries are parsed through it -- so without one, loading
-// XamlControlsResources fails on the first {ThemeResource} it meets and the
-// window goes down with it. There are no custom XAML types here, so every
-// answer is "I do not know that one", which is the correct answer.
-struct App : xaml::ApplicationT<App> {
-
-    // Theme dictionary selection is what "cannot find a resource with the given
-    // key" actually means: every ThemeResource in generic.xaml lives under
-    // Light/Dark/HighContrast, and if no theme is chosen none of them resolve.
-    // An app with package identity gets one from the system; this one says so.
-    // Both of these are App.xaml in a generated project, and App.xaml is applied
-    // by InitializeComponent IN THE CONSTRUCTOR -- before the framework builds
-    // its theme context, not after. Doing the same work from OnLaunched is too
-    // late: the merge throws on the first {ThemeResource} it meets and takes the
-    // window with it.
-    App() {
-        Log("app: ctor");
-        RequestedTheme(xaml::ApplicationTheme::Dark);
-        try {
-            Resources().MergedDictionaries().Append(controls::XamlControlsResources{});
-            Log("app: resources merged");
-        } catch (winrt::hresult_error const& e) {
-            // UNRESOLVED, and the app opens anyway rather than dying in its own
-            // constructor. Everything built from primitives -- text, panels,
-            // borders -- still renders; the first TEMPLATED control (a Button, a
-            // ProgressBar) will not, because its default style reaches for a
-            // theme brush that is not there. See the note in winappsdk.cmake.
-            Log("app: XamlControlsResources unavailable: " + winrt::to_string(e.message()));
-        }
+// FIRST, a real IXamlMetadataProvider. It is how the XAML parser resolves type
+// names, and WinUI's own theme dictionaries are parsed through it -- so the
+// framework's provider has to be reachable from the app object. Implementing
+// the interface but answering nullptr is WORSE than not implementing it: it
+// tells the parser that no type exists, including the framework's own, and
+// XamlControlsResources fails to construct with "Catastrophic failure".
+// Delegating to XamlControlsXamlMetaDataProvider is the whole job.
+//
+// SECOND, the merge belongs in OnLaunched and NOT in the constructor. The
+// application has to be fully constructed, WITH its metadata provider attached,
+// before it can load a resource dictionary; doing it a few lines earlier fails
+// for a reason that has nothing to do with resources.
+//
+// Neither half works without the other, which is what made this expensive: the
+// dictionary in the constructor fails with a provider, and a nullptr provider
+// fails wherever the dictionary goes.
+struct App : xaml::ApplicationT<App, winrt::Microsoft::UI::Xaml::Markup::IXamlMetadataProvider> {
+    winrt::Microsoft::UI::Xaml::Markup::IXamlType GetXamlType(
+        winrt::Windows::UI::Xaml::Interop::TypeName const& type) {
+        return provider_.GetXamlType(type);
+    }
+    winrt::Microsoft::UI::Xaml::Markup::IXamlType GetXamlType(winrt::hstring const& name) {
+        return provider_.GetXamlType(name);
+    }
+    winrt::com_array<winrt::Microsoft::UI::Xaml::Markup::XmlnsDefinition> GetXmlnsDefinitions() {
+        return provider_.GetXmlnsDefinitions();
     }
 
     void OnLaunched(xaml::LaunchActivatedEventArgs const&) try {
+        // The theme dictionaries every templated control's default style reaches
+        // into. Here, not in the constructor: see above.
+        Resources().MergedDictionaries().Append(controls::XamlControlsResources{});
+
         shell_.Open(std::move(g_openWith));
         shell_.Start();
     } catch (winrt::hresult_error const& e) {
@@ -913,6 +896,9 @@ struct App : xaml::ApplicationT<App> {
     }
 
 private:
+    // WinUI's own metadata, for WinUI's own types. There are no custom XAML
+    // types in this app, so there is nothing to add to it.
+    winrt::Microsoft::UI::Xaml::XamlTypeInfo::XamlControlsXamlMetaDataProvider provider_;
     Shell shell_;
 };
 

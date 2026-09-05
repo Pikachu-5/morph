@@ -8,8 +8,25 @@
 namespace morph::broker {
 namespace {
 
-// Section 11.2: "ActiveProcessLimit = 4 // worker + ffmpeg + slack".
-constexpr DWORD kActiveProcessLimit = 4;
+// Section 11.2 writes this as `ActiveProcessLimit = 4 // worker + ffmpeg +
+// slack`, and that number is wrong -- it is the third place the document
+// contradicts itself, after section 4.2's Dijkstra sweep and section 18's claim
+// that the WinUI project needs MSBuild.
+//
+// It counts FFmpeg's one child and forgets section 8.6, which puts a WEBVIEW2
+// in the same worker. WebView2 is a browser: it spawns a browser process, a GPU
+// process, a crashpad handler, a network service, a storage service and at
+// least one renderer, and every one of them inherits this job. At four, the
+// worker never gets its browser and every PDF conversion fails -- while the
+// same conversion through the worker's CLI, which has no job object, succeeds.
+// That is a difference between two paths that nothing in the test suite crossed
+// until the app did.
+//
+// Thirty-two keeps the limit doing its actual job. It is a backstop against a
+// provider that forks without bound, not a budget: the memory cap and
+// KILL_ON_JOB_CLOSE are what contain a runaway, and neither is weakened by
+// leaving room for a browser.
+constexpr DWORD kActiveProcessLimit = 32;
 
 // Distinct pipe names per worker. A counter rather than a GUID because the name
 // only has to be unique within this broker, and a readable name is worth
